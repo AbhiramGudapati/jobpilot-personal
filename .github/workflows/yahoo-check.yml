@@ -26,7 +26,8 @@ jobs:
           python-version: '3.12'
       - name: Install scanner dependencies
         run: python -m pip install -r worker/requirements.txt
-      - name: Validate required credentials
+      - name: Check Yahoo setup
+        id: credentials
         shell: bash
         env:
           YAHOO_EMAIL: ${{ secrets.YAHOO_EMAIL }}
@@ -34,10 +35,13 @@ jobs:
           JOBPILOT_SYNC_KEY: ${{ secrets.JOBPILOT_SYNC_KEY }}
         run: |
           if [[ -z "$YAHOO_EMAIL" || -z "$YAHOO_APP_PASSWORD" || -z "$JOBPILOT_SYNC_KEY" ]]; then
-            echo "Missing Yahoo or sync-key Actions secrets. See README." >&2
-            exit 1
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Yahoo secrets are not configured yet; skipping this scheduled scan."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Scan Yahoo and encrypt locally
+        if: steps.credentials.outputs.configured == 'true'
         env:
           YAHOO_EMAIL: ${{ secrets.YAHOO_EMAIL }}
           YAHOO_APP_PASSWORD: ${{ secrets.YAHOO_APP_PASSWORD }}
@@ -47,15 +51,19 @@ jobs:
           JOBPILOT_PUSH_TOKEN: ${{ secrets.JOBPILOT_PUSH_TOKEN }}
         run: python worker/yahoo_scan.py
       - name: Prepare static website and ciphertext (no secrets)
+        if: steps.credentials.outputs.configured == 'true'
         run: |
           mkdir -p _site
           cp index.html style.css app.js push-client.js sw.js manifest.webmanifest icon.svg apple-touch-icon.png _site/
           cp feed.json _site/
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
+        if: steps.credentials.outputs.configured == 'true'
       - uses: actions/upload-pages-artifact@v4
+        if: steps.credentials.outputs.configured == 'true'
         with:
           path: _site
       - name: Publish website + updated encrypted feed to GitHub Pages
+        if: steps.credentials.outputs.configured == 'true'
         id: deployment
         uses: actions/deploy-pages@v4
