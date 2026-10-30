@@ -1,0 +1,61 @@
+name: Scan Yahoo and publish encrypted JobPilot feed
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '11,41 * * * *'
+concurrency:
+  group: jobpilot-pages
+  cancel-in-progress: false
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+jobs:
+  scan-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install scanner dependencies
+        run: python -m pip install -r worker/requirements.txt
+      - name: Validate required credentials
+        shell: bash
+        env:
+          YAHOO_EMAIL: ${{ secrets.YAHOO_EMAIL }}
+          YAHOO_APP_PASSWORD: ${{ secrets.YAHOO_APP_PASSWORD }}
+          JOBPILOT_SYNC_KEY: ${{ secrets.JOBPILOT_SYNC_KEY }}
+        run: |
+          if [[ -z "$YAHOO_EMAIL" || -z "$YAHOO_APP_PASSWORD" || -z "$JOBPILOT_SYNC_KEY" ]]; then
+            echo "Missing Yahoo or sync-key Actions secrets. See README." >&2
+            exit 1
+          fi
+      - name: Scan Yahoo and encrypt locally
+        env:
+          YAHOO_EMAIL: ${{ secrets.YAHOO_EMAIL }}
+          YAHOO_APP_PASSWORD: ${{ secrets.YAHOO_APP_PASSWORD }}
+          JOBPILOT_SYNC_KEY: ${{ secrets.JOBPILOT_SYNC_KEY }}
+          JOBPILOT_TIMEZONE: America/Chicago
+          JOBPILOT_PUSH_URL: ${{ secrets.JOBPILOT_PUSH_URL }}
+          JOBPILOT_PUSH_TOKEN: ${{ secrets.JOBPILOT_PUSH_TOKEN }}
+        run: python worker/yahoo_scan.py
+      - name: Prepare static website and ciphertext (no secrets)
+        run: |
+          mkdir -p _site
+          cp index.html style.css app.js push-client.js sw.js manifest.webmanifest icon.svg apple-touch-icon.png _site/
+          cp feed.json _site/
+          touch _site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - name: Publish website + updated encrypted feed to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

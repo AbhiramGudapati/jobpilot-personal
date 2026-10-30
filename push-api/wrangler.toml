@@ -1,0 +1,16 @@
+name = "jobpilot-personal-push"
+main = "index.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+# Enter ONLY your website's origin (without a /jobpilot-personal/ path).
+ALLOWED_ORIGIN = "https://abhiramgudapati.github.io"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "jobpilot-push"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"

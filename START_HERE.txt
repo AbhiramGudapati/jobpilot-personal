@@ -1,0 +1,45 @@
+JOBPILOT PERSONAL v1.0 — FINAL $0 WEBSITE
+
+WHAT IS READY
+The website includes the application tracker, internal calendar, interview schedule,
+follow-ups, stage history, priority labels, meeting links, conflict warnings,
+CSV/ICS exports, local backup/restore, and an iPhone Home Screen interface.
+Yahoo automation and real closed-app push source are also included.
+
+PUBLISH IT FOR FREE (GitHub Pages)
+1. Create a PUBLIC repository named jobpilot-personal: https://github.com/new
+2. Upload the ZIP's CONTENTS to the new repository root, including .github/workflows.
+3. In repository Settings > Pages, select GitHub Actions for the build/deploy source.
+4. Go to Actions > Publish JobPilot website > Run workflow if it does not deploy.
+5. Open https://abhiramgudapati.github.io/jobpilot-personal/ in Safari
+   (after Pages has finished deploying), then Share > Add to Home Screen.
+6. Add applications and interviews. Manual planning works before Yahoo is connected.
+
+CONNECT YAHOO (OPTIONAL BUT NEEDED FOR AUTOMATIC EMAIL MONITORING)
+7. In WEBSITE Settings, Generate key, Copy, and Unlock feed.
+8. In Yahoo Account Security, create a Yahoo app-specific password if available.
+9. In PRIVATE GitHub Actions repository secrets create:
+   YAHOO_EMAIL          = your Yahoo address
+   YAHOO_APP_PASSWORD   = the Yahoo-generated APP password
+   JOBPILOT_SYNC_KEY   = exact 64-character key from the website
+10. In GitHub Actions run Scan Yahoo and publish encrypted JobPilot feed once.
+11. In website Yahoo Review tap Sync now to import calendar invitations and
+    review suggested application changes.
+
+REAL LOCK SCREEN PUSH (OPTIONAL)
+12. Read push-api/SETUP.md for the free Cloudflare Worker + D1 setup.
+13. Enter the Worker URL and private API token in JobPilot Settings.
+14. Open the installed iPhone Home Screen icon and tap Enable push, then Send test.
+15. For invitations detected while JobPilot is closed, also set optional GitHub
+    Actions secrets JOBPILOT_PUSH_URL and JOBPILOT_PUSH_TOKEN.
+
+KEEP SECRETS PRIVATE. Never share app passwords, secret keys, tokens or backups in
+public GitHub files or chat. JSON/CSV/ICS exports are not encrypted.
+
+LIMITS
+No new jobpilot-personal repository was present when this release was built.
+A ZIP is not itself a public HTTPS website. Yahoo and Cloudflare account setup
+requires your action; neither can be connected or device-tested from the ZIP.
+GitHub Actions schedule and push delivery are best effort, not guaranteed alarms.
+
+Full details: README.md and FINAL_RELEASE.md
