@@ -1,4 +1,5 @@
 name: Publish JobPilot website
+# Publishes the current frontend while retaining the existing encrypted Yahoo feed.
 on:
   push:
     branches: [main]
