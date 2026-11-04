@@ -85,7 +85,20 @@
   let editorId = '';
   let toastTimeout;
   let syncBusy = false;
-  let key = sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(DEVICE_KEY) || '';
+  // Remember the existing Yahoo encryption key on a trusted personal device.
+  // If the old session key still exists, migrate it once to persistent storage.
+  const validFeedKey = candidate => /^[a-f0-9]{64}$/i.test(candidate || '');
+  function rememberedFeedKey() {
+    const persistent = localStorage.getItem(DEVICE_KEY) || '';
+    const session = sessionStorage.getItem(SESSION_KEY) || '';
+    const candidate = validFeedKey(persistent) ? persistent : validFeedKey(session) ? session : '';
+    if (!candidate) return '';
+    try { localStorage.setItem(DEVICE_KEY, candidate.toLowerCase()); sessionStorage.removeItem(SESSION_KEY); }
+    catch { /* Browser may prohibit storage; retain current session access. */ }
+    return candidate.toLowerCase();
+  }
+  let key = rememberedFeedKey();
+  let editingSyncKey = false;
   let syncError = '';
 
   function save(render = true) {
@@ -187,13 +200,14 @@
   function renderInbox() {
     const pending = pendingMails().sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)));
     $('#reviewCount').textContent = pending.length;
-    $('#reviewList').innerHTML = pending.slice(0, 80).map(m => mailCard(m, true)).join('') || empty('No pending suggestions. Yahoo messages will appear here after a successful sync.', '✓');
+    $('#reviewList').innerHTML = pending.slice(0, 80).map(m => mailCard(m, true)).join('') || empty(db.lastSyncAt ? 'All caught up. No emails need your approval.' : 'Your recruitment emails will appear here after the first check.', '✓');
     $('#mailHistory').innerHTML = db.mailbox.filter(m => m.status !== 'pending').sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt))).slice(0, 20).map(m => mailCard(m, false)).join('') || empty('No processed messages yet.', '✉');
-    const connected = Boolean(db.lastSyncAt);
+    const connected = Boolean(db.lastSyncAt && key && !syncError);
     $('#syncStatus').classList.toggle('connected', connected);
-    $('#syncHeadline').textContent = syncError ? 'Yahoo synchronization needs attention' : connected ? 'Encrypted Yahoo feed connected' : 'Yahoo feed not connected yet';
+    $('#syncHeadline').textContent = syncError ? 'Yahoo needs attention' : connected ? 'Yahoo is connected' : key ? 'Ready to check Yahoo' : 'Connect Yahoo once';
     const scanAge = db.lastScanAt && isValid(parseDate(db.lastScanAt)) ? (Date.now() - Date.parse(db.lastScanAt)) / 3600000 : null;
-    $('#syncDescription').textContent = syncError || (connected ? `Last synchronized ${fmtDateTime(db.lastSyncAt)}. ${scanAge != null && scanAge > 3 ? '⚠ Yahoo scanner may be delayed; last scan ' + Math.round(scanAge) + ' hours ago.' : 'Scanner checks on a best-effort schedule.'}` : 'Set your key and GitHub Actions secrets to enable automatic monitoring.');
+    $('#syncDescription').textContent = syncError || (connected ? `Last checked ${fmtDateTime(db.lastSyncAt)}. ${scanAge != null && scanAge > 3 ? 'Yahoo background checks appear delayed.' : 'New messages are checked automatically; tap Check now to refresh.'}` : key ? 'Your key is saved. Tap Check now to see recruitment emails.' : 'Save your existing Yahoo sync key in Settings. You only need to do this once on this iPhone.');
+    $('#syncInfoAction').hidden = connected;
     $('#syncStatus').classList.toggle('stale',scanAge != null && scanAge > 3);
 
     $('#syncInbox').disabled = syncBusy;
@@ -208,8 +222,12 @@
     $('#lastSyncLabel').textContent = db.lastSyncAt ? fmtDateTime(db.lastSyncAt) : 'Never';
     $('#lastScanLabel').textContent = db.lastScanAt ? fmtDateTime(db.lastScanAt) : 'Not connected';
     $('#remindersEnabled').checked = Boolean(db.reminderEnabled);
-    $('#rememberSyncKey').checked = Boolean(localStorage.getItem(DEVICE_KEY));
-    $('#syncKeyMessage').textContent = key ? (localStorage.getItem(DEVICE_KEY) ? 'Key saved on this device. Anyone with access to your browser profile may recover it.' : 'Key unlocked for this session only. Keep a separate secure copy.') : 'No key unlocked yet. Generate or enter a 64-character hex key.';
+    const saved = Boolean(localStorage.getItem(DEVICE_KEY) && key);
+    $('#yahooConnectedPanel').hidden = !key;
+    $('#yahooSetupPanel').hidden = Boolean(key && !editingSyncKey);
+    $('#yahooKeyNote').textContent = saved ? 'Key saved on this iPhone. JobPilot will open and check Yahoo without asking again.' : 'Key unlocked for this session. Persistent storage was not available.';
+    $('#syncKeyMessage').textContent = syncError ? 'Sync problem: ' + syncError : saved ? 'No need to enter the key again unless you clear website data or choose Forget this device.' : key ? 'If your browser allows device storage, saving the key again will remember it.' : 'Paste the existing key from your GitHub setup. Do not generate a new key if your Yahoo scanner already works.';
+    $('#yahooSetupGuide').hidden = Boolean(key && db.lastSyncAt && !syncError);
     if ('Notification' in window) $('#notificationStatus').textContent = `On-screen alerts: ${Notification.permission}. For closed-app push notifications, use Cloud Push below.`;
   }
   function fieldsFor(type, data = {}) {
@@ -357,7 +375,7 @@
   }
   async function syncFeed() {
     if (syncBusy) return;
-    if (!key) { setView('settings'); toast('Enter or generate your sync key first.'); return; }
+    if (!key) { editingSyncKey = true; setView('settings'); toast('Save your existing Yahoo key once on this iPhone.'); return; }
     syncBusy = true; syncError = ''; renderInbox();
     try {
       const response = await fetch(`./feed.json?refresh=${Date.now()}`, {cache: 'no-store'});
@@ -372,18 +390,27 @@
     const supplied = $('#syncKeyInput').value.trim().replace(/\s+/g, '');
     if (!/^[0-9a-f]{64}$/i.test(supplied)) return toast('The sync key must be exactly 64 hex characters.');
     key = supplied.toLowerCase();
-    sessionStorage.setItem(SESSION_KEY, key);
-    if ($('#rememberSyncKey').checked) localStorage.setItem(DEVICE_KEY, key);
-    else localStorage.removeItem(DEVICE_KEY);
+    let remembered = false;
+    try { localStorage.setItem(DEVICE_KEY, key); remembered = true; sessionStorage.removeItem(SESSION_KEY); }
+    catch { try { sessionStorage.setItem(SESSION_KEY, key); } catch { /* No browser storage available. */ } }
+    editingSyncKey = false;
+    syncError = '';
     $('#syncKeyInput').value = '';
-    paint(); toast('Feed key unlocked. Tap Sync now to read the encrypted feed.');
+    $('#syncKeyInput').type = 'password';
+    $('#showSyncKey').textContent = 'Show';
+    paint();
+    toast(remembered ? 'Yahoo saved on this device. No need to enter the key again.' : 'Unlocked, but this browser cannot remember the key after closing.');
+    if (location.protocol.startsWith('http')) syncFeed();
   }
   function generateKey() {
+    if (key && !confirm('Your Yahoo scanner already has a key. A new key will break sync until you update JOBPILOT_SYNC_KEY in GitHub. Continue?')) return;
+    editingSyncKey = true;
+    $('#yahooSetupPanel').hidden = false;
     const bytes = crypto.getRandomValues(new Uint8Array(32));
     const randomKey = [...bytes].map(n => n.toString(16).padStart(2, '0')).join('');
     $('#syncKeyInput').type = 'text';
     $('#syncKeyInput').value = randomKey;
-    toast('New random key generated. Copy it into GitHub Actions secrets, then tap Unlock feed.');
+    toast('New key generated. Only save it after updating the matching GitHub secret.');
   }
   async function copyKey() {
     const value = $('#syncKeyInput').value.trim() || key;
@@ -504,8 +531,8 @@
     $('#generateSyncKey').addEventListener('click', generateKey);
     $('#copySyncKey').addEventListener('click', copyKey);
     $('#showSyncKey').addEventListener('click', () => { const input = $('#syncKeyInput'); input.type = input.type === 'password' ? 'text' : 'password'; $('#showSyncKey').textContent = input.type === 'password' ? 'Show' : 'Hide'; });
-    $('#forgetSyncKey').addEventListener('click', () => { if (!confirm('Forget the stored sync key on this device? Your planner records will remain.')) return; key = ''; localStorage.removeItem(DEVICE_KEY); sessionStorage.removeItem(SESSION_KEY); $('#syncKeyInput').value = ''; paint(); toast('Key forgotten on this device.'); });
-    $('#rememberSyncKey').addEventListener('change', e => { if (!key) return; if (e.target.checked) localStorage.setItem(DEVICE_KEY, key); else localStorage.removeItem(DEVICE_KEY); paint(); });
+    $('#forgetSyncKey').addEventListener('click', () => { if (!confirm('Forget the saved Yahoo key on this device? Your applications and calendar will stay.')) return; key = ''; editingSyncKey = false; syncError = ''; localStorage.removeItem(DEVICE_KEY); sessionStorage.removeItem(SESSION_KEY); $('#syncKeyInput').value = ''; paint(); toast('Yahoo key forgotten on this device.'); });
+    $('#changeSyncKey').addEventListener('click', () => { editingSyncKey = true; $('#yahooSetupPanel').hidden = false; $('#syncKeyInput').value = ''; $('#syncKeyInput').focus(); toast('Paste the original key from your GitHub secret setup.'); });
     $('#remindersEnabled').addEventListener('change', e => { db.reminderEnabled = e.target.checked; save(); checkReminders(); });
     $('#notificationPermission').addEventListener('click', async () => { if (!('Notification' in window)) return toast('This browser does not support notifications.'); try { const result = await Notification.requestPermission(); toast(`Notification permission: ${result}.`); paint(); } catch { toast('Notifications are unavailable in this browser.'); } });
     $('#exportBackup').addEventListener('click', downloadJson);
@@ -521,7 +548,7 @@
     if (new URLSearchParams(location.search).get('open') === 'calendar') setView('calendar');
     if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('./sw.js').catch(() => {});
     window.setInterval(checkReminders, 60000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkReminders(); paint(); } });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkReminders(); paint(); if (key && !syncBusy && (!db.lastSyncAt || Date.now() - Date.parse(db.lastSyncAt) > 10 * 60 * 1000)) syncFeed(); } });
     checkReminders();
     // Refresh on open when already unlocked. Scanner may not have run on schedule.
     if (key && location.protocol.startsWith('http')) syncFeed();

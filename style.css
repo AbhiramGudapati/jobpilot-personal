@@ -34,3 +34,12 @@ dialog{color:var(--text);background:var(--surface);border:1px solid var(--border
 .job-controls{flex-wrap:wrap}
 .status-card.stale .status-orb{background:var(--gold)}
 @media(max-width:660px){.connectivity{font-size:10px}.install-tip{flex-direction:column;align-items:flex-start}.job-controls select{flex:1;min-width:105px}}
+/* JobPilot v1.1: show a connected state, hide technical setup until needed. */
+[hidden]{display:none!important}
+.connection-panel{display:flex;align-items:flex-start;gap:11px;padding:15px;border:1px solid rgba(103,224,192,.28);background:rgba(103,224,192,.08);border-radius:12px;margin:12px 0 14px}
+.connection-panel strong{font-size:14px;display:block;margin:0 0 4px}
+.connection-panel p{font-size:12px;color:var(--muted);margin:0;line-height:1.55}
+.connection-check{background:rgba(103,224,192,.16);color:var(--green);border-radius:50%;width:28px;height:28px;display:grid;place-items:center;flex-shrink:0;font-weight:900}
+.settings-disclosure{border-top:1px solid var(--border);margin-top:14px;padding-top:14px}
+.settings-disclosure summary{font-size:12px;color:var(--muted);font-weight:700;cursor:pointer;list-style:revert}
+.settings-disclosure[open] summary{color:var(--text);margin-bottom:12px}

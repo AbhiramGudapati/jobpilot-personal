@@ -33,7 +33,15 @@ jobs:
         run: |
           mkdir -p _site
           cp index.html style.css app.js push-client.js sw.js manifest.webmanifest icon.svg apple-touch-icon.png _site/
-          if [[ -f feed.json ]]; then cp feed.json _site/; fi
+          # Preserve the previous *encrypted* Yahoo feed during a website-only deploy.
+          # The scheduled scanner replaces it with a fresh encrypted copy later.
+          if [[ -f feed.json ]]; then
+            cp feed.json _site/
+          else
+            curl --fail --silent --show-error --location --max-time 15 \
+              'https://abhiramgudapati.github.io/jobpilot-personal/feed.json' \
+              -o _site/feed.json || echo 'No prior encrypted feed available yet.'
+          fi
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v4

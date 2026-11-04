@@ -27,7 +27,7 @@ This release adds application **priority, source, application date and stage-cha
 2. Upload the **contents inside this folder** into the repository root (not a nested folder): `index.html`, `style.css`, `app.js`, `push-client.js`, `sw.js`, `icon.svg`, `apple-touch-icon.png`, `manifest.webmanifest`, `worker/`, and `.github/workflows/`.
    - GitHub's browser uploader may be easier on a computer because the hidden `.github` directory must also be included. With the GitHub connector connected to ChatGPT, the code files can also be uploaded after you have created the empty repo. The website and **both** workflows must be in the same repository.
 3. Under **Settings > Pages**, select **GitHub Actions** as the Build and deployment source. A workflow named **Publish JobPilot website** deploys the static site from `main` automatically. If needed, run it once from Actions > Publish JobPilot website > Run workflow. Your URL should then be `https://YOURUSERNAME.github.io/jobpilot-personal/`. Wait for GitHub to finish publishing.
-4. Open your new website, go to **Settings > Generate key**, **Copy**, then choose **Unlock feed**. Do **not** share this key in a public chat or commit it to Git. Store a separate secure copy of it.
+4. For a new account only: open **Settings > Advanced Yahoo settings > Generate a new key**, copy it and save it privately, then update `JOBPILOT_SYNC_KEY` in GitHub. **If Yahoo was already connected, do not generate a new key.** Instead paste the existing key once under **Settings > Yahoo connection > Save on this iPhone**.
 
 ### Connect Yahoo securely
 
@@ -42,7 +42,7 @@ This release adds application **priority, source, application date and stage-cha
 
 3. You do **not** need to grant the workflow write access to your repository. The scanner deploys encrypted feed directly to GitHub Pages using the normal Pages deployment permissions.
 4. Go to **Actions > Scan Yahoo and publish encrypted JobPilot feed > Run workflow**. If it completes successfully, it **deploys the updated encrypted feed to the live site** without committing it to your source repository. It contains ciphertext, not readable Yahoo mail.
-5. Return to the website, use **Yahoo Review > Sync now**, and approve suggested changes. It automatically checks a new feed when opened if you have already unlocked it. The GitHub Actions workflow is scheduled approximately every 30 minutes (11 and 41 minutes past the hour), but GitHub may delay, suspend, or drop scheduled runs.
+5. Return to the website, use **Yahoo Inbox > Check now**, and approve suggested changes. It automatically checks a new feed when opened if you have already unlocked it. The GitHub Actions workflow is scheduled approximately every 30 minutes (11 and 41 minutes past the hour), but GitHub may delay, suspend, or drop scheduled runs.
 
 **No credentials are ever required in this chat.** Do not send me your passwords or sync key.
 
@@ -55,7 +55,7 @@ The site works immediately for **manual** applications, interview dates, calenda
 - The website can load its cached interface offline after its initial HTTPS install. Changes to manually managed records work offline; Yahoo scanning and feed synchronization require a connection.
 - **The Pages repository must be public on GitHub Free**, but no readable Yahoo data, private recruiter information, or local notes should ever be committed there. The deployed `feed.json` is encrypted; its size and update timing remain visible. Someone with your sync key can decrypt any copies of the encrypted feed they have saved.
 - The website saves approved events, job records, and the email review list to browser `localStorage`, **unencrypted**. Anyone with access to your unlocked phone/browser profile might view it. Export a JSON backup before clearing website data or switching devices. The backup itself is not encrypted.
-- The 64-hex-character sync key is stored in **sessionStorage** by default, and is not included in JSON backups. Check **Remember** only if you accept the risk of saving it to browser localStorage. Revoking a leaked key requires replacing the secret and regenerating the feed; any previously downloaded feed encrypted using the old key remains vulnerable.
+- The 64-hex-character sync key is stored on this trusted device in browser **localStorage** when you tap **Save on this iPhone**, and is not included in JSON backups. This avoids repeated prompts, but someone with access to this browser profile can use it. Select **Advanced Yahoo settings → Forget this device** to clear the saved key. Revoking a leaked key requires replacing the GitHub secret and republishing the feed; older downloaded ciphertext encrypted with that key remains vulnerable.
 - The workflow uses read-only IMAP mailbox access (`select(..., readonly=True)` and `BODY.PEEK[]`); it doesn't delete, label, or send emails.
 - Optional closed-app push **is implemented** under `push-api/`, but must be deployed to a Cloudflare Workers Free account, linked in Settings, and subscribed on iPhone. The backend sends encrypted generic reminders, not email contents. Delivery can be delayed by connectivity, notification settings, and service limits; for critical interviews also keep Yahoo email notifications enabled.
 - This is a personal single-device planner, not a multi-user SaaS service. Manual edits aren't synchronized between different phones or browsers. Use backup/export to move between devices.
@@ -102,3 +102,10 @@ Visit `http://localhost:8080`. On an iPhone, use your GitHub Pages **HTTPS** URL
 See **`push-api/SETUP.md`** for exact zero-cost setup commands, security notes, and iPhone steps. A Cloudflare Workers Free account is required and you must deploy the Worker. GitHub Pages by itself cannot send closed-app push notifications. If Yahoo scanning is enabled, adding `JOBPILOT_PUSH_URL` and `JOBPILOT_PUSH_TOKEN` GitHub Actions secrets makes it schedule push reminders for high-confidence ICS invites even before you reopen the site. Do not post private keys or tokens here or in GitHub source files.
 
 The old in-app alert toggle remains available for use while the website is open. Use **Settings → Cloud push notifications** to enable true background alerts. Notification receipt depends on Apple's permission, Focus, network availability and service limits; no free service guarantees delivery to the exact second.
+
+
+## v1.1: one-time Yahoo key setup on your private iPhone
+
+The Home Screen web app now remembers your **existing** 64-character Yahoo encryption key automatically when you tap **Save on this iPhone**, and migrates previous session-only unlocks where the session is still available. It syncs on opening and when you return after 10+ minutes. Settings shows a simple Yahoo-connected status instead of a password field. **Advanced Yahoo settings** contains options to replace, generate or forget the key. Do not regenerate if your existing GitHub scanner works.
+
+**Privacy trade-off:** To avoid asking repeatedly, this version saves the key in that device's browser localStorage. Other scripts running under the same website origin and someone with access to its browser profile could use it. Use only on a private device, keep iPhone passcode protection on, and select **Forget this device** if necessary. It is not uploaded to GitHub or included in backups. Clearing website data, using another device, or certain Safari storage-reset conditions may still require one new unlock.
