@@ -115,3 +115,13 @@ The Home Screen web app now remembers your **existing** 64-character Yahoo encry
 The built-in calendar now shows multiple appointments per date and highlights Yahoo interview suggestions that have not yet been confirmed. Review tentative entries in **Calendar** or **Review** before they become saved appointments. Date-only suggestions never invent a start time. The Yahoo scanner also handles numeric dates and searches relevant older interview subjects and the Archive folder when available.
 
 Mobile navigation is now **Home, Calendar, Jobs, Review**, with **Settings** in the header gear. Your previously saved Yahoo encryption key, applications, and calendar events carry forward without reconfiguration. The separate Cloudflare push service is not activated by this website update. See `RELEASE_NOTES_v1.3.md` for details and limitations.
+
+## v1.4 usability improvements
+
+- **Add missing interview** from Home, Calendar, or Yahoo Review. The date/time starts blank for undated invitations and must be supplied before saving; no guessed appointments.
+- **Go to next interview** from Calendar jumps to the next upcoming saved or pending dated interview.
+- Yahoo Review **Load latest** fetches the latest encrypted scan already published by GitHub Actions; it does **not** initiate a new Yahoo mailbox scan. An optional **Run a fresh Yahoo scan** link opens the authenticated GitHub workflow.
+- Yahoo Review displays the last background scan time. Undated interview suggestions now offer Set interview time, even when the scanner cannot extract a date.
+- Existing saved key, jobs, events, approval history, encrypted Yahoo synchronization and Cloudflare push source remain unchanged. No setup reset needed.
+
+See `RELEASE_NOTES_v1.4.md` for details. The v1.4 UI is a usability release, not a guarantee that every recruiter email can be parsed.

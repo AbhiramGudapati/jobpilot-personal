@@ -246,7 +246,7 @@
     $('#syncStatus').classList.toggle('connected', connected);
     $('#syncHeadline').textContent = syncError ? 'Yahoo needs attention' : connected ? 'Yahoo is connected' : key ? 'Ready to check Yahoo' : 'Connect Yahoo once';
     const scanAge = db.lastScanAt && isValid(parseDate(db.lastScanAt)) ? (Date.now() - Date.parse(db.lastScanAt)) / 3600000 : null;
-    $('#syncDescription').textContent = syncError || (connected ? `Last checked ${fmtDateTime(db.lastSyncAt)}. ${scanAge != null && scanAge > 3 ? 'Yahoo background checks appear delayed.' : 'New messages are checked automatically; tap Check now to refresh.'}` : key ? 'Your key is saved. Tap Check now to see recruitment emails.' : 'Save your existing Yahoo sync key in Settings. You only need to do this once on this iPhone.');
+    $('#syncDescription').textContent = syncError || (connected ? `Last Yahoo scan: ${db.lastScanAt ? fmtDateTime(db.lastScanAt) : 'not reported'}. ${scanAge != null && scanAge > 3 ? 'Background scan may be delayed. Run a fresh scan from the link below.' : 'Load latest retrieves saved scan results, not new messages directly from Yahoo.'}` : key ? 'Your key is saved. Load latest results after the Yahoo scanner has run.' : 'Save your existing Yahoo sync key in Settings. You only need to do this once on this iPhone.');
     $('#syncInfoAction').hidden = connected;
     $('#syncStatus').classList.toggle('stale',scanAge != null && scanAge > 3);
 
@@ -256,7 +256,7 @@
   function mailCard(m, pending) {
     const category = ({interview: 'Interview', interview_cancelled: 'Cancellation', application: 'Application', rejection: 'Decision', offer: 'Offer', assessment: 'Assessment', followup: 'Follow-up', other: 'Recruitment'})[m.category] || 'Recruitment';
     const status = ({approved: 'Added to planner', dismissed: 'Dismissed', auto: 'Automatically added'})[m.status] || '';
-    return `<div class="mail-card" id="mail-${esc(m.id)}"><div class="mail-top"><span class="mail-category">${esc(category)} · ${esc(m.company || m.sender || 'Unknown company')}</span><span class="status-text">${esc(fmtDate(m.receivedAt))}</span></div><h3>${esc(m.subject || 'Untitled message')}</h3><p>From ${esc(m.sender || m.fromEmail || 'Unknown sender')}</p>${m.preview ? `<p class="mail-preview">${esc(m.preview)}</p>` : ''}<div class="mail-summary">${m.stageSuggestion ? `<span>Stage: ${esc(m.stageSuggestion)}</span>` : ''}${m.when ? `<span>▦ ${esc(fmtDateTime(m.when))}</span>` : m.dateOnly ? `<span>▦ ${esc(isoDate(m.dateOnly))} · time to confirm</span>` : ''}${m.dateConfidence === 'medium' ? '<span>⚠ Check extracted date</span>' : ''}${m.cancelled ? '<span>⚠ Cancellation detected</span>' : ''}</div>${pending ? `<div class="mail-actions">${m.category === 'interview' && !m.when ? '' : `<button type="button" class="button button-primary small" data-approve-mail="${esc(m.id)}">${m.category === 'interview' ? 'Add interview' : 'Approve update'}</button>`}<button type="button" class="button button-quiet small" data-dismiss-mail="${esc(m.id)}">Dismiss</button>${m.when || m.dateOnly ? `<button type="button" class="button button-quiet small" data-edit-mail-event="${esc(m.id)}">${m.when ? 'Check time / details' : 'Set interview time'}</button>` : ''}</div>` : `<p class="status-text" style="margin-top:10px">${esc(status)}</p>`}</div>`;
+    return `<div class="mail-card" id="mail-${esc(m.id)}"><div class="mail-top"><span class="mail-category">${esc(category)} · ${esc(m.company || m.sender || 'Unknown company')}</span><span class="status-text">${esc(fmtDate(m.receivedAt))}</span></div><h3>${esc(m.subject || 'Untitled message')}</h3><p>From ${esc(m.sender || m.fromEmail || 'Unknown sender')}</p>${m.preview ? `<p class="mail-preview">${esc(m.preview)}</p>` : ''}<div class="mail-summary">${m.stageSuggestion ? `<span>Stage: ${esc(m.stageSuggestion)}</span>` : ''}${m.when ? `<span>▦ ${esc(fmtDateTime(m.when))}</span>` : m.dateOnly ? `<span>▦ ${esc(isoDate(m.dateOnly))} · time to confirm</span>` : ''}${m.dateConfidence === 'medium' ? '<span>⚠ Check extracted date</span>' : ''}${m.cancelled ? '<span>⚠ Cancellation detected</span>' : ''}</div>${pending ? `<div class="mail-actions">${m.category === 'interview' && !m.when ? '' : `<button type="button" class="button button-primary small" data-approve-mail="${esc(m.id)}">${m.category === 'interview' ? 'Add interview' : 'Approve update'}</button>`}<button type="button" class="button button-quiet small" data-dismiss-mail="${esc(m.id)}">Dismiss</button>${m.when || m.dateOnly || m.category === 'interview' ? `<button type="button" class="button button-quiet small" data-edit-mail-event="${esc(m.id)}">${m.when ? 'Check time / details' : 'Set interview time'}</button>` : ''}</div>` : `<p class="status-text" style="margin-top:10px">${esc(status)}</p>`}</div>`;
   }
   function renderSettings() {
     $('#lastSyncLabel').textContent = db.lastSyncAt ? fmtDateTime(db.lastSyncAt) : 'Never';
@@ -293,7 +293,8 @@
       field('jobUrl','Job posting URL','url',{wide:true,placeholder:'https://careers.example.com/…'}),
       field('notes','Notes / next steps','textarea',{wide:true,placeholder:'Recruiter conversations, interview rounds…'})
     ].join('');
-    const start = data.when && isValid(parseDate(data.when)) ? localInputValue(parseDate(data.when)) : localInputValue(new Date(Date.now() + 3600000));
+    // An undated interview requires an explicit start time, not a guessed one.
+    const start = data.requireConfirmedTime ? '' : data.when && isValid(parseDate(data.when)) ? localInputValue(parseDate(data.when)) : localInputValue(new Date(Date.now() + 3600000));
     return [
       field('title','Event title','text',{required:true,placeholder:'Interview with recruiter'}),
       field('company','Company','text'),
@@ -307,9 +308,10 @@
   function openEditor(type, id = '', template = null) {
     editorMode = type; editorId = id;
     const existing = template || (type === 'job' ? db.jobs.find(j => j.id === id) : db.events.find(e => e.id === id)) || {};
-    $('#editorHeading').textContent = `${id ? 'Edit' : 'New'} ${type === 'job' ? 'application' : 'event'}`;
+    const interviewOnly = type === 'event' && !id && Boolean(existing.requireConfirmedTime);
+    $('#editorHeading').textContent = interviewOnly ? 'Add an interview' : `${id ? 'Edit' : 'New'} ${type === 'job' ? 'application' : 'event'}`;
     $('#editorFields').innerHTML = fieldsFor(type, existing);
-    $('#submitEditor').textContent = id ? 'Save changes' : `Add ${type === 'job' ? 'application' : 'event'}`;
+    $('#submitEditor').textContent = interviewOnly ? 'Save interview' : id ? 'Save changes' : `Add ${type === 'job' ? 'application' : 'event'}`;
     $('#editorModal').showModal();
   }
   function closeEditor() { $('#editorModal').close(); editorMode = null; editorId = ''; editorMailId = ''; }
@@ -526,6 +528,14 @@
     const data = btn.dataset;
     if (data.view) return setView(data.view);
     if (data.action === 'add-job') return openEditor('job');
+    if (data.action === 'add-interview') return openEditor('event', '', {title: 'Interview', type: 'Interview', when: '', requireConfirmedTime: true});
+    if (data.action === 'next-interview') {
+      const next = interviewLeads()[0];
+      if (!next) return toast('No upcoming interviews found. Add one or check Yahoo Review.');
+      const [y,m,d] = next.day.split('-').map(Number);
+      selectedDate = new Date(y,m-1,d); displayMonth = new Date(y,m-1,1); setView('calendar');
+      return;
+    }
     if (data.action === 'add-event') {
       const when=new Date(selectedDate.getFullYear(),selectedDate.getMonth(),selectedDate.getDate(),9,0);
       if (dayKey(when) === dayKey(now()) && when < now()) {
@@ -554,7 +564,7 @@
     if (data.complete) { const e = db.events.find(e => e.id === data.complete); if (e) { e.completed = true; save(); toast('Task marked complete.'); } return; }
     if (data.approveMail) { const m = db.mailbox.find(x => x.id === data.approveMail); applyMail(m); save(); toast('Suggestion approved and applied.'); return; }
     if (data.dismissMail) { const m = db.mailbox.find(x => x.id === data.dismissMail); if (m) { m.status = 'dismissed'; m.processedAt = now().toISOString(); save(); toast('Suggestion dismissed.'); } return; }
-    if (data.editMailEvent) { const m = db.mailbox.find(x => x.id === data.editMailEvent); if (!m) return; openEditor('event', '', {title: m.title || m.role || m.subject || 'Interview', company: m.company || '', when: m.when || '', meetingLink: m.meetingLink || '', type: m.category === 'interview' ? 'Interview' : 'Follow-up', notes: `Suggested from Yahoo Mail. ${m.dateOnly ? 'Possible date '+m.dateOnly+'. ' : ''}Confirm the exact time and timezone.`}); editorMailId=m.id; if (!m.when) toast('Enter the confirmed interview date and time before saving.'); return; }
+    if (data.editMailEvent) { const m = db.mailbox.find(x => x.id === data.editMailEvent); if (!m) return; openEditor('event', '', {title: m.title || m.role || m.subject || 'Interview', company: m.company || '', when: m.when || '', requireConfirmedTime: !m.when, meetingLink: m.meetingLink || '', type: m.category === 'interview' ? 'Interview' : 'Follow-up', notes: `Suggested from Yahoo Mail. ${m.dateOnly ? 'Possible date '+m.dateOnly+'. ' : ''}Confirm the exact time and timezone.`}); editorMailId=m.id; if (!m.when) toast('Enter the confirmed interview date and time before saving.'); return; }
   }
   function setupListeners() {
     document.addEventListener('click', handleClick);
