@@ -1,5 +1,5 @@
-const CACHE = 'jobpilot-shell-v17';
-const SHELL = ['./', './index.html', './style.css', './app.js', './push-client.js', './manifest.webmanifest', './icon.svg', './apple-touch-icon.png'];
+const CACHE = 'jobpilot-shell-v18';
+const SHELL = ['./index.html?ui=2.2.0', './style.css?ui=2.2.0', './app.js?ui=2.2.0', './push-client.js?ui=2.2.0', './manifest.webmanifest', './icon.svg', './apple-touch-icon.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
 });
@@ -14,13 +14,13 @@ self.addEventListener('fetch', event => {
     event.respondWith(fetch(event.request, {cache: 'no-store'}));
     return;
   }
-  event.respondWith(fetch(event.request).then(response => {
+  event.respondWith(fetch(event.request, {cache: 'no-cache'}).then(response => {
     if (response.ok && url.pathname.match(/\.(html|css|js|svg|png|webmanifest)$/) || response.ok && event.request.mode === 'navigate') {
       const copy = response.clone();
       caches.open(CACHE).then(cache => cache.put(event.request, copy)).catch(() => {});
     }
     return response;
-  }).catch(() => caches.match(event.request).then(cached => cached || (event.request.mode === 'navigate' ? caches.match('./index.html') : Response.error()))));
+  }).catch(() => caches.match(event.request).then(cached => cached || (event.request.mode === 'navigate' ? caches.match('./index.html?ui=2.2.0') : Response.error()))));
 });
 
 // True background push, delivered by the push service even when all tabs are closed.

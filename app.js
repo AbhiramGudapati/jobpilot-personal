@@ -752,7 +752,16 @@
     if (reconcileImportedDuplicates()) save(false);
     setupListeners(); paint();
     if (new URLSearchParams(location.search).get('open') === 'calendar') setView('calendar');
-    if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('./sw.js').catch(() => {});
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      if (navigator.serviceWorker.controller) navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (sessionStorage.getItem('jp-ui-reload-2.2') !== '1') {
+          sessionStorage.setItem('jp-ui-reload-2.2', '1');
+          location.reload();
+        }
+      });
+      navigator.serviceWorker.register('./sw.js?ui=2.2.0', {updateViaCache:'none'})
+        .then(reg => reg.update()).catch(() => {});
+    }
     window.setInterval(checkReminders, 60000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkReminders(); paint(); if (key && !syncBusy && (!db.lastSyncAt || Date.now() - Date.parse(db.lastSyncAt) > 10 * 60 * 1000)) syncFeed(); } });
     checkReminders();
