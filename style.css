@@ -242,3 +242,141 @@ h1,h2,h3{letter-spacing:-.035em}h1{font-size:clamp(30px,3vw,38px);line-height:1.
 @media(max-width:660px){main{padding:23px 16px calc(128px + env(safe-area-inset-bottom))}.topbar{height:61px;padding:0 18px}.top-actions{gap:7px}.top-actions .icon-button{height:36px;width:36px;font-size:18px}.page-heading{align-items:flex-start;margin-bottom:19px}.page-heading h1{font-size:29px;margin:0 0 5px}.page-heading .subheading{font-size:12px;line-height:1.45}.page-heading>.button{min-height:36px;padding:9px 10px;font-size:11px}.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:15px}.stat-tile{min-height:110px;padding:16px 14px;border-radius:17px}.stat-value{font-size:32px}.stat-name{font-size:11px;line-height:1.3}.stat-hint{font-size:10px}.dashboard-grid,.calendar-layout,.settings-grid{grid-template-columns:1fr;gap:14px}.stacked{gap:14px}.surface{padding:19px 17px;border-radius:18px}.section-head h2{font-size:19px}.interview-list-item{grid-template-columns:75px minmax(0,1fr) auto;gap:9px;padding:15px 0}.interview-datebox{border-radius:11px;padding:10px 3px}.interview-datebox strong{font-size:12px}.interview-datebox span{font-size:9px}.interview-heading{font-size:13px}.interview-subtitle{font-size:11px}.interview-list-item>.button{min-width:44px;padding:7px 8px;font-size:10px;min-height:32px}.calendar-main{padding:14px 12px}.calendar-toolbar{margin-bottom:15px}.calendar-day{min-height:66px;padding:5px 3px;border-radius:9px}.day-number{width:24px;height:24px}.month-grid{gap:3px}.calendar-interview-count,.calendar-other-count{font-size:9px}.review-help{padding:12px}.mail-card{padding:16px}.mail-card h3{font-size:14px}.button{border-radius:12px}}
 @media(max-width:370px){.interview-list-item{grid-template-columns:68px minmax(0,1fr) auto;gap:7px}.interview-datebox strong{font-size:11px}.interview-list-item>.button{padding:6px 7px}.stat-tile{padding:14px 12px}.bottom-nav{width:calc(100% - 18px)}}
 @media(prefers-reduced-motion:reduce){.button:active,.icon-button:active{transform:none}}
+
+
+/* JobPilot v2.1: iPhone alignment repair. Presentation only; no data changes. */
+#nextInterview .interview-list-item:first-child {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "eyebrow eyebrow"
+    "details details"
+    "time action";
+  align-items: start;
+  column-gap: 14px;
+  row-gap: 13px;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  overflow: visible;
+  flex-wrap: nowrap;
+}
+#nextInterview .interview-list-item:first-child::before {
+  grid-area: eyebrow;
+  display: block;
+  width: auto;
+  margin: 0;
+  min-width: 0;
+  flex: initial;
+}
+#nextInterview .interview-list-item:first-child .interview-item-body {
+  grid-area: details;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+#nextInterview .interview-list-item:first-child .interview-heading {
+  font-size: clamp(16px, 4.2vw, 19px);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+#nextInterview .interview-list-item:first-child .interview-subtitle {
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+#nextInterview .interview-list-item:first-child .interview-datebox {
+  grid-area: time;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  text-align: left;
+}
+#nextInterview .interview-list-item:first-child .interview-datebox strong {
+  font-size: 17px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+#nextInterview .interview-list-item:first-child .interview-datebox span {
+  font-size: 11px;
+  white-space: nowrap;
+}
+#nextInterview .interview-list-item:first-child > .button {
+  grid-area: action;
+  align-self: center;
+  justify-self: end;
+  width: auto;
+  min-width: 76px;
+  max-width: 100%;
+  margin: 0;
+  white-space: nowrap;
+}
+#nextInterview .interview-list-item:not(:first-child) .interview-item-body {min-width: 0;overflow-wrap:anywhere}
+#nextInterview .interview-list-item:not(:first-child) .interview-heading,
+#nextInterview .interview-list-item:not(:first-child) .interview-subtitle {overflow-wrap:anywhere}
+.stats-grid {align-items: stretch;}
+.stat-tile {height: auto; min-width: 0; overflow: hidden;}
+.stat-name, .stat-hint {overflow-wrap: anywhere;}
+@media (max-width: 870px) {
+  .bottom-nav {
+    width: min(460px, calc(100% - 20px));
+    height: 68px;
+    min-height: 68px;
+    max-height: 68px;
+    left: 50%;
+    right: auto;
+    bottom: max(10px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    padding: 6px 8px;
+    display: flex;
+    align-items: stretch;
+    gap: 4px;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+  .bottom-nav .mobile-nav-btn {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 3px;
+    height: 54px;
+    min-height: 0;
+    max-height: 54px;
+    min-width: 0;
+    margin: 0;
+    padding: 5px 3px;
+    line-height: 1.1;
+  }
+  .bottom-nav .mobile-nav-btn svg {width: 21px;height:21px; flex-shrink:0;}
+  .bottom-nav .mobile-nav-btn .nav-text {font-size: 10px;line-height: 1.2;white-space: nowrap;}
+  main {padding-bottom: calc(106px + env(safe-area-inset-bottom));}
+  #toast {bottom: calc(86px + env(safe-area-inset-bottom));}
+  .stats-grid {grid-auto-rows: minmax(118px, auto);}
+  .stats-grid .stat-tile {min-height: 118px; justify-content: center;}
+}
+@media (max-width: 660px) {
+  #nextInterview .interview-list-item:first-child {padding: 18px 17px;row-gap: 11px;}
+  #nextInterview .interview-list-item:first-child .interview-datebox strong {font-size: 16px;}
+  .stats-grid {grid-auto-rows: minmax(112px, auto);}
+  .stats-grid .stat-tile {min-height: 112px; padding: 14px 13px;}
+  .stats-grid .stat-value {font-size: 29px;}
+  .stats-grid .stat-name {line-height: 1.3;}
+}
+@media (max-width: 360px) {
+  #nextInterview .interview-list-item:first-child {grid-template-columns:minmax(0,1fr) auto;column-gap:8px;}
+  #nextInterview .interview-list-item:first-child .interview-datebox strong {font-size: 14px;}
+  #nextInterview .interview-list-item:first-child > .button {min-width:68px;padding:7px 10px;}
+  .bottom-nav {width:calc(100% - 12px);}
+}
