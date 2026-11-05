@@ -125,3 +125,8 @@ Mobile navigation is now **Home, Calendar, Jobs, Review**, with **Settings** in 
 - Existing saved key, jobs, events, approval history, encrypted Yahoo synchronization and Cloudflare push source remain unchanged. No setup reset needed.
 
 See `RELEASE_NOTES_v1.4.md` for details. The v1.4 UI is a usability release, not a guarantee that every recruiter email can be parsed.
+
+
+## v1.5 — Count interviews, not emails
+
+Repeat confirmation messages with the same company, role, and interview start time are linked to one calendar appointment. Different interview times or different roles stay separate. Older duplicated imported calendar entries can be restored using **Keep separately**. Your Yahoo encryption key and local application data are unchanged. For details, see `RELEASE_NOTES_v1.5.md`.

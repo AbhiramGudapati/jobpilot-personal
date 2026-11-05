@@ -130,10 +130,73 @@
   function futureEvents() { return db.events.filter(e => !e.cancelled && isValid(parseDate(e.when)) && parseDate(e.when) >= now()).sort((a, b) => parseDate(a.when) - parseDate(b.when)); }
   function jobsActive() { return db.jobs.filter(j => !['Rejected', 'Offer'].includes(j.stage)); }
   function pendingMails() { return db.mailbox.filter(m => m.status === 'pending'); }
+  // Emails are messages, not appointments. Match an interview by its slot and
+  // company/role (or an exact calendar UID), never by company or date alone.
+  const comparable = v => String(v || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+  const companyName = v => comparable(v).replace(/\b(?:incorporated|inc|corporation|corp|llc|limited|ltd)\b/g, '').replace(/\s+/g, ' ').trim();
+  function detailsFor(item) {
+    const original = item.sourceId && db.mailbox.find(m => m.id === item.sourceId);
+    return {
+      ...item,
+      company: companyName(item.company || original?.company),
+      role: comparable(item.role || original?.role),
+      when: isValid(parseDate(item.when)) ? parseDate(item.when).getTime() : 0,
+      day: item.when && isValid(parseDate(item.when)) ? dayKey(parseDate(item.when)) : item.dateOnly || '',
+      link: safeUrl(item.meetingLink || original?.meetingLink),
+      calendarUid: String(item.calendarUid || original?.calendarUid || '').trim().toLowerCase()
+    };
+  }
+  function sameInterview(first, second, allowDateOnly = true) {
+    const a = detailsFor(first), b = detailsFor(second);
+    if (a.calendarUid && b.calendarUid && a.calendarUid === b.calendarUid) return true;
+    if (!a.day || !b.day || a.day !== b.day) return false;
+    // Two confirmed, different start times mean two separate interviews.
+    if (a.when && b.when && Math.abs(a.when - b.when) > 2 * 60000) return false;
+    if (!a.when || !b.when) {
+      if (!allowDateOnly) return false;
+      // A date-only email may be a second round. Don't silently approve it.
+    }
+    if (a.company && b.company && a.company !== b.company) return false;
+    if (a.role && b.role && a.role !== b.role) return false;
+    if (a.link && b.link && a.link !== b.link) return false;
+    return Boolean((a.company && b.company) || (a.link && b.link && a.link === b.link));
+  }
+  function eventForMail(m, allowDateOnly = true) {
+    return db.events.find(e => e.type === 'Interview' && !e.cancelled && !e.duplicateOf &&
+      (e.sourceId === m.id || (m.calendarUid && e.calendarUid === m.calendarUid) || sameInterview(e, m, allowDateOnly)));
+  }
+  function reconcileImportedDuplicates() {
+    // Keep all original records for a reversible backup. Hide only high-confidence
+    // duplicates from the calendar and reminders; never merge user-edited events.
+    const imported = db.events.filter(e => e.type === 'Interview' && !e.cancelled && !e.duplicateOf && e.sourceId && !e.userEdited);
+    let changed = false;
+    for (let i=0; i<imported.length; i++) {
+      const primary = imported[i];
+      if (primary.cancelled || primary.duplicateOf) continue;
+      for (let j=i+1; j<imported.length; j++) {
+        const duplicate = imported[j];
+        if (duplicate.cancelled || duplicate.duplicateOf) continue;
+        if (sameInterview(primary, duplicate, false)) {
+          duplicate.duplicateOf = primary.id;
+          duplicate.cancelled = true;
+          primary.relatedMailIds = [...new Set([...(primary.relatedMailIds || []), duplicate.sourceId].filter(Boolean))];
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
   function pendingInterviewCandidates() {
-    return pendingMails().filter(m => m.category === 'interview' && !m.cancelled &&
+    const candidates = pendingMails().filter(m => m.category === 'interview' && !m.cancelled &&
       ((m.when && isValid(parseDate(m.when))) || /^\d{4}-\d{2}-\d{2}$/.test(m.dateOnly || '')) &&
-      !db.events.some(e => e.sourceId === m.id || (m.calendarUid && e.calendarUid === m.calendarUid)));
+      !eventForMail(m));
+    const priority = m => (isValid(parseDate(m.when)) ? 10 : 0) + (m.role ? 2 : 0) + (m.calendarUid ? 1 : 0);
+    candidates.sort((a,b)=>priority(b)-priority(a) || String(b.receivedAt).localeCompare(String(a.receivedAt)));
+    const distinct = [];
+    for (const m of candidates) {
+      if (!distinct.some(other => sameInterview(other, m))) distinct.push(m);
+    }
+    return distinct;
   }
   function interviewLeads(includePast = false) {
     const saved = db.events.filter(e => e.type === 'Interview' && !e.cancelled && isValid(parseDate(e.when)))
@@ -152,7 +215,7 @@
     $('#todayLabel').textContent = new Date().toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
     $('#metricActive').textContent = jobsActive().length;
     $('#metricInterviews').textContent = interviewLeads().length;
-    $('#metricInterviewHint').textContent = `${interviewLeads().filter(x=>x.kind==='saved').length} saved · ${interviewLeads().filter(x=>x.kind==='review').length} to review`;
+    $('#metricInterviewHint').textContent = `${interviewLeads().filter(x=>x.kind==='saved').length} on calendar · ${interviewLeads().filter(x=>x.kind==='review').length} to confirm`;
     $('#metricFollowups').textContent = actionEvents().length;
     $('#metricReview').textContent = pendingMails().length;
     $('#sidebarReviewCount').textContent = pendingMails().length;
@@ -224,7 +287,9 @@
     });
     $('#selectedDayEvents').innerHTML=items.map(({kind,item:e})=>{
       if(kind==='review') return `<div class="detail-event tentative-event"><div class="time">${e.when?esc(fmtTime(e.when)):'Time to confirm'} · NEEDS REVIEW</div><h3>${esc(e.company||e.role||'Interview invitation')}</h3><p>${esc(e.role||e.subject||'Possible interview from Yahoo')}</p><div class="detail-actions"><button type="button" class="button button-primary small" data-find-mail="${esc(e.id)}">Review invitation</button></div></div>`;
-      return `<div class="detail-event ${e.type==='Interview'?'interview-border':e.type==='Follow-up'?'followup-border':e.type==='Deadline'?'deadline-border':''}"><div class="time">${esc(fmtTime(e.when))}${e.completed?' · COMPLETED':''} · ${durationOf(e)} min</div><h3>${esc(e.company||e.title)}</h3><p>${esc(e.company?e.title:e.type)}</p>${e.notes?`<p>${esc(e.notes)}</p>`:''}${safeUrl(e.meetingLink)?`<p><a class="inline-link" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(e.meetingLink))}">Join meeting ↗</a></p>`:''}<div class="detail-actions"><button type="button" class="button button-quiet small" data-edit-event="${esc(e.id)}">Edit</button><button type="button" class="button button-quiet small" data-download-ics="${esc(e.id)}">Export</button>${['Follow-up','Deadline'].includes(e.type)?`<button type="button" class="button button-quiet small" data-${e.completed?'reopen-event':'complete'}="${esc(e.id)}">${e.completed?'Reopen':'Done'}</button>`:''}<button type="button" class="button button-danger-ghost small" data-delete-event="${esc(e.id)}">Delete</button></div></div>`;
+      const related = db.events.filter(other => other.duplicateOf === e.id);
+      const linkedCount = (e.relatedMailIds || []).length;
+      return `<div class="detail-event ${e.type==='Interview'?'interview-border':e.type==='Follow-up'?'followup-border':e.type==='Deadline'?'deadline-border':''}"><div class="time">${esc(fmtTime(e.when))}${e.completed?' · COMPLETED':''} · ${durationOf(e)} min</div><h3>${esc(e.company||e.title)}</h3><p>${esc(e.company?e.title:e.type)}</p>${e.notes?`<p>${esc(e.notes)}</p>`:''}${linkedCount ? `<p class="micro-muted">${linkedCount+1} related recruiter emails, 1 appointment</p>` : ''}${related.length ? `<div class="micro-muted">${related.length} matching calendar entr${related.length === 1 ? 'y' : 'ies'} grouped. ${related.map(other=>`<button type="button" class="button button-quiet small" data-restore-duplicate="${esc(other.id)}">Keep separately</button>`).join('')}</div>` : ''}${safeUrl(e.meetingLink)?`<p><a class="inline-link" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(e.meetingLink))}">Join meeting ↗</a></p>`:''}<div class="detail-actions"><button type="button" class="button button-quiet small" data-edit-event="${esc(e.id)}">Edit</button><button type="button" class="button button-quiet small" data-download-ics="${esc(e.id)}">Export</button>${['Follow-up','Deadline'].includes(e.type)?`<button type="button" class="button button-quiet small" data-${e.completed?'reopen-event':'complete'}="${esc(e.id)}">${e.completed?'Reopen':'Done'}</button>`:''}<button type="button" class="button button-danger-ghost small" data-delete-event="${esc(e.id)}">Delete</button></div></div>`;
     }).join('')||empty('No interviews or tasks on this date.','▦');
   }
   function renderJobs() {
@@ -255,8 +320,9 @@
   }
   function mailCard(m, pending) {
     const category = ({interview: 'Interview', interview_cancelled: 'Cancellation', application: 'Application', rejection: 'Decision', offer: 'Offer', assessment: 'Assessment', followup: 'Follow-up', other: 'Recruitment'})[m.category] || 'Recruitment';
-    const status = ({approved: 'Added to planner', dismissed: 'Dismissed', auto: 'Automatically added'})[m.status] || '';
-    return `<div class="mail-card" id="mail-${esc(m.id)}"><div class="mail-top"><span class="mail-category">${esc(category)} · ${esc(m.company || m.sender || 'Unknown company')}</span><span class="status-text">${esc(fmtDate(m.receivedAt))}</span></div><h3>${esc(m.subject || 'Untitled message')}</h3><p>From ${esc(m.sender || m.fromEmail || 'Unknown sender')}</p>${m.preview ? `<p class="mail-preview">${esc(m.preview)}</p>` : ''}<div class="mail-summary">${m.stageSuggestion ? `<span>Stage: ${esc(m.stageSuggestion)}</span>` : ''}${m.when ? `<span>▦ ${esc(fmtDateTime(m.when))}</span>` : m.dateOnly ? `<span>▦ ${esc(isoDate(m.dateOnly))} · time to confirm</span>` : ''}${m.dateConfidence === 'medium' ? '<span>⚠ Check extracted date</span>' : ''}${m.cancelled ? '<span>⚠ Cancellation detected</span>' : ''}</div>${pending ? `<div class="mail-actions">${m.category === 'interview' && !m.when ? '' : `<button type="button" class="button button-primary small" data-approve-mail="${esc(m.id)}">${m.category === 'interview' ? 'Add interview' : 'Approve update'}</button>`}<button type="button" class="button button-quiet small" data-dismiss-mail="${esc(m.id)}">Dismiss</button>${m.when || m.dateOnly || m.category === 'interview' ? `<button type="button" class="button button-quiet small" data-edit-mail-event="${esc(m.id)}">${m.when ? 'Check time / details' : 'Set interview time'}</button>` : ''}</div>` : `<p class="status-text" style="margin-top:10px">${esc(status)}</p>`}</div>`;
+    const status = ({approved: 'Reviewed', dismissed: 'Dismissed', auto: 'Automatically added', related: 'Related email — already counted'})[m.status] || '';
+    const already = m.category === 'interview' && eventForMail(m, false);
+    return `<div class="mail-card" id="mail-${esc(m.id)}"><div class="mail-top"><span class="mail-category">${esc(category)} · ${esc(m.company || m.sender || 'Unknown company')}</span><span class="status-text">${esc(fmtDate(m.receivedAt))}</span></div><h3>${esc(m.subject || 'Untitled message')}</h3><p>From ${esc(m.sender || m.fromEmail || 'Unknown sender')}</p>${m.preview ? `<p class="mail-preview">${esc(m.preview)}</p>` : ''}<div class="mail-summary">${m.stageSuggestion ? `<span>Stage: ${esc(m.stageSuggestion)}</span>` : ''}${m.when ? `<span>▦ ${esc(fmtDateTime(m.when))}</span>` : m.dateOnly ? `<span>▦ ${esc(isoDate(m.dateOnly))} · time to confirm</span>` : ''}${m.dateConfidence === 'medium' ? '<span>⚠ Check extracted date</span>' : ''}${m.cancelled ? '<span>⚠ Cancellation detected</span>' : ''}</div>${pending ? `<div class="mail-actions">${m.category === 'interview' && !m.when ? '' : `<button type="button" class="button button-primary small" data-approve-mail="${esc(m.id)}">${m.category === 'interview' ? (already ? 'Link to existing' : 'Add interview') : 'Approve update'}</button>`}<button type="button" class="button button-quiet small" data-dismiss-mail="${esc(m.id)}">Dismiss</button>${m.when || m.dateOnly || m.category === 'interview' ? `<button type="button" class="button button-quiet small" data-edit-mail-event="${esc(m.id)}">${m.when ? 'Check time / details' : 'Set interview time'}</button>` : ''}</div>` : `<p class="status-text" style="margin-top:10px">${esc(status)}</p>`}</div>`;
   }
   function renderSettings() {
     $('#lastSyncLabel').textContent = db.lastSyncAt ? fmtDateTime(db.lastSyncAt) : 'Never';
@@ -293,7 +359,8 @@
       field('jobUrl','Job posting URL','url',{wide:true,placeholder:'https://careers.example.com/…'}),
       field('notes','Notes / next steps','textarea',{wide:true,placeholder:'Recruiter conversations, interview rounds…'})
     ].join('');
-    // An undated interview requires an explicit start time, not a guessed one.
+    // Require an explicit real time when a missing or undated interview is added.
+    // Do not silently invent a start time for an invitation without one.
     const start = data.requireConfirmedTime ? '' : data.when && isValid(parseDate(data.when)) ? localInputValue(parseDate(data.when)) : localInputValue(new Date(Date.now() + 3600000));
     return [
       field('title','Event title','text',{required:true,placeholder:'Interview with recruiter'}),
@@ -327,8 +394,11 @@
       const clashes = conflicting(fields, editorId);
       if (clashes.length && !confirm(`Scheduling conflict with ${clashes.length} other event(s): ${clashes.slice(0,2).map(c=>c.title).join(', ')}. Save anyway?`)) return;
       const old = db.events.find(x => x.id === editorId);
+      const suggested = editorMailId ? db.mailbox.find(m => m.id === editorMailId) : null;
+      const matching = suggested && db.events.find(e => e.id !== editorId && e.type === 'Interview' && !e.cancelled && sameInterview(e, {...suggested, ...fields}, false));
       if (old) {delete old.end;Object.assign(old, fields, {userEdited: true, updatedAt: now().toISOString()});}
-      else db.events.push({id: uid(), ...fields, ...(editorMailId?{sourceId:editorMailId}:{}), completed: false, cancelled: false, createdAt: now().toISOString()});
+      else if (matching) matching.relatedMailIds = [...new Set([...(matching.relatedMailIds || []), editorMailId])];
+      else db.events.push({id: uid(), ...fields, ...(editorMailId?{sourceId:editorMailId,role:suggested?.role||'',userEdited:true}:{}), completed: false, cancelled: false, createdAt: now().toISOString()});
       if(editorMailId) {const m=db.mailbox.find(m=>m.id===editorMailId);if(m&&m.status==='pending') {const job=findOrCreateJob(m);if(job&&m.stageSuggestion==='Interview')logStage(job,'Interview','Yahoo approval');m.status='approved';m.processedAt=now().toISOString();}}
     } else if (editorMode === 'job') {
       if (fields.jobUrl && !safeUrl(fields.jobUrl)) return toast('Job posting URL must start with https:// or http://.');
@@ -365,7 +435,7 @@
       affected.forEach(e => { e.cancelled = true; e.updatedAt = now().toISOString(); });
     }
     if (['interview','assessment','followup'].includes(m.category) && m.when && isValid(parseDate(m.when)) && !m.cancelled) {
-      const existing = db.events.find(e => e.sourceId === m.id || (m.calendarUid && e.calendarUid === m.calendarUid));
+      const existing = eventForMail(m, false);
       if (existing && m.calendarUid && m.dateConfidence === 'high' && !existing.userEdited) {
         existing.when = new Date(m.when).toISOString();
         existing.end = m.end || existing.end;
@@ -373,7 +443,10 @@
         existing.updatedAt = now().toISOString();
         existing.cancelled = false;
       }
-      if (!existing && isValid(parseDate(m.when))) db.events.push({id: uid(), title: m.title || `${m.category === 'interview' ? 'Interview' : m.category === 'assessment' ? 'Assessment' : 'Recruitment event'}${m.company ? ' · ' + m.company : ''}`, company: m.company || '', when: new Date(m.when).toISOString(), end: m.end || '', type: m.category === 'interview' ? 'Interview' : m.category === 'followup' ? 'Follow-up' : 'Deadline', meetingLink: safeUrl(m.meetingLink), notes: `From Yahoo: ${m.subject || ''}${m.location ? ' · ' + m.location : ''}${m.dateConfidence === 'medium' ? ' · Verify the extracted date and timezone.' : ''}`, completed: false, cancelled: false, sourceId: m.id, calendarUid: m.calendarUid || '', createdAt: now().toISOString()});
+      if (existing && existing.sourceId !== m.id) {
+        existing.relatedMailIds = [...new Set([...(existing.relatedMailIds || []), m.id])];
+      }
+      if (!existing && isValid(parseDate(m.when))) db.events.push({id: uid(), title: m.title || `${m.category === 'interview' ? 'Interview' : m.category === 'assessment' ? 'Assessment' : 'Recruitment event'}${m.company ? ' · ' + m.company : ''}`, company: m.company || '', role: m.role || '', when: new Date(m.when).toISOString(), end: m.end || '', type: m.category === 'interview' ? 'Interview' : m.category === 'followup' ? 'Follow-up' : 'Deadline', meetingLink: safeUrl(m.meetingLink), notes: `From Yahoo: ${m.subject || ''}${m.location ? ' · ' + m.location : ''}${m.dateConfidence === 'medium' ? ' · Verify the extracted date and timezone.' : ''}`, completed: false, cancelled: false, sourceId: m.id, calendarUid: m.calendarUid || '', createdAt: now().toISOString()});
     }
     m.status = automatic ? 'auto' : 'approved';
     m.processedAt = now().toISOString();
@@ -399,6 +472,26 @@
       db.mailbox.push(mail);
       previous.add(mail.id);
       fresh++;
+      if (mail.category === 'interview' && mail.when && eventForMail(mail, false)) {
+        const event = eventForMail(mail, false);
+        const sameUid = Boolean(mail.calendarUid && event.calendarUid && mail.calendarUid === event.calendarUid);
+        const moved = sameUid && isValid(parseDate(mail.when)) && isValid(parseDate(event.when)) &&
+          Math.abs(parseDate(mail.when) - parseDate(event.when)) > 2 * 60000;
+        if (moved && mail.dateConfidence === 'high' && !event.userEdited) {
+          // A newer official calendar invitation for the same UID can reschedule
+          // the appointment; do not count it as an additional interview.
+          applyMail(mail, true); automatic++;
+          continue;
+        }
+        if (!moved) {
+          event.relatedMailIds = [...new Set([...(event.relatedMailIds || []), mail.id])];
+          mail.status = 'related';
+          mail.processedAt = now().toISOString();
+          continue;
+        }
+        // If a user edited the event, or a text-only reschedule is ambiguous,
+        // keep it pending for review rather than silently change their calendar.
+      }
       const manuallyEditedExisting = Boolean(mail.calendarUid && db.events.some(e => e.calendarUid === mail.calendarUid && e.userEdited));
       const confidentInvite = !manuallyEditedExisting && mail.category === 'interview' && mail.dateConfidence === 'high' && mail.when && !mail.cancelled && isValid(parseDate(mail.when)) && parseDate(mail.when) > now();
       // A real calendar attachment with a future start time is sufficiently clear to import.
@@ -410,6 +503,7 @@
     db.seenMailIds = [...previous].slice(-3000);
     db.lastSyncAt = now().toISOString();
     db.lastScanAt = feed.generatedAt || '';
+    reconcileImportedDuplicates();
     save();
     return {fresh, automatic};
   }
@@ -493,6 +587,7 @@
       if (!data || !Array.isArray(data.jobs) || !Array.isArray(data.events) || data.jobs.length > 10000 || data.events.length > 10000) throw Error('Invalid JobPilot backup.');
       if (!confirm('Replace this device’s planner data with the imported backup?')) return;
       db = {...defaultDb(), ...data, mailbox: Array.isArray(data.mailbox) ? data.mailbox : [], seenMailIds: Array.isArray(data.seenMailIds) ? data.seenMailIds : []};
+      reconcileImportedDuplicates();
       save(); toast('Backup restored.');
     } catch (e) { toast(e.message || 'Could not import backup.'); }
     finally { ev.target.value = ''; }
@@ -558,6 +653,15 @@
     if (data.reopenEvent) { const e=db.events.find(e=>e.id===data.reopenEvent); if(e){e.completed=false;save();toast('Task reopened.');} return; }
     if (data.dismissInstall) {localStorage.setItem(INSTALL_KEY,'yes');$('#homeInstallTip').hidden=true;return;}
 
+    if (data.restoreDuplicate) {
+      const duplicate = db.events.find(e => e.id === data.restoreDuplicate && e.duplicateOf);
+      if (!duplicate) return;
+      duplicate.cancelled = false;
+      duplicate.duplicateOf = '';
+      duplicate.userEdited = true; // Keep the user's correction on subsequent scans.
+      save(); toast('This is now a separate interview.');
+      return;
+    }
     if (data.editEvent) return openEditor('event', data.editEvent);
     if (data.deleteJob) { if (confirm('Delete this application?')) { db.jobs = db.jobs.filter(j => j.id !== data.deleteJob); save(); } return; }
     if (data.deleteEvent) { if (confirm('Delete this event?')) { db.events = db.events.filter(e => e.id !== data.deleteEvent); save(); } return; }
@@ -607,6 +711,7 @@
   }
   function init() {
     document.documentElement.dataset.theme = localStorage.getItem(THEMES_KEY) === 'light' ? 'light' : 'dark';
+    if (reconcileImportedDuplicates()) save(false);
     setupListeners(); paint();
     if (new URLSearchParams(location.search).get('open') === 'calendar') setView('calendar');
     if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('./sw.js').catch(() => {});
