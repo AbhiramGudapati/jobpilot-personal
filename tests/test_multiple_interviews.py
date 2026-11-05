@@ -31,7 +31,7 @@ def test_november_6_shows_two_interviews_and_review_flow():
         page.evaluate('(feed) => window.__jobpilotTest.mergeFeed(feed)', data)
         page.wait_for_timeout(80)
         assert page.locator('#metricInterviews').inner_text()=='3'
-        assert '1 saved · 2 to review' in page.locator('#metricInterviewHint').inner_text()
+        assert '1 on calendar · 2 to confirm' in page.locator('#metricInterviewHint').inner_text()
         assert page.locator('#nextInterview .interview-list-item').count()==3
         page.locator('[data-view="calendar"]').last.click()
         page.locator('[data-select-day="2026-11-06"]').click()
@@ -46,7 +46,7 @@ def test_november_6_shows_two_interviews_and_review_flow():
         assert 'Review emails' in page.locator('#inbox-heading').inner_text()
         assert page.locator('#mail-text-hr-6').count()==1
         page.locator('#mail-text-hr-6 [data-approve-mail]').click()
-        assert page.locator('#metricInterviewHint').inner_text().startswith('2 saved')
+        assert page.locator('#metricInterviewHint').inner_text().startswith('2 on calendar')
         page.locator('[data-view="calendar"]').last.click()
         page.locator('[data-select-day="2026-11-06"]').click()
         assert page.locator('#selectedDayEvents .detail-event').count()==2
@@ -64,7 +64,7 @@ def test_november_6_shows_two_interviews_and_review_flow():
         assert page.locator('#field-when').input_value()==''
         page.locator('#field-when').fill('2026-11-07T09:30')
         page.locator('#submitEditor').click()
-        assert page.locator('#metricInterviewHint').inner_text().startswith('3 saved')
+        assert page.locator('#metricInterviewHint').inner_text().startswith('3 on calendar')
         # Persisted after reload.
         persisted = page.evaluate('JSON.parse(localStorage.getItem("jobpilot.personal.v2"))')
         assert len([e for e in persisted['events'] if e['type']=='Interview'])==3
