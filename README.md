@@ -130,3 +130,8 @@ See `RELEASE_NOTES_v1.4.md` for details. The v1.4 UI is a usability release, not
 ## v1.5 — Count interviews, not emails
 
 Repeat confirmation messages with the same company, role, and interview start time are linked to one calendar appointment. Different interview times or different roles stay separate. Older duplicated imported calendar entries can be restored using **Keep separately**. Your Yahoo encryption key and local application data are unchanged. For details, see `RELEASE_NOTES_v1.5.md`.
+
+
+## Version 1.6: Accurate November 6 interview parsing
+
+Fixes recruiter time formats such as `Friday, Nov. 6 at 2 p.m.`. Written confirmation with an exact appointment can be added to Calendar, marked as imported from text so the user can verify the time zone. Date-only/ambiguous emails are shown for review but **are not counted as scheduled interviews**. SMG and Scotts Miracle-Gro are recognized as the same employer alias; distinct roles and times remain separate when confirmed. A previously seen, pending message can be improved after a scanner update without duplicates. Existing device data and Yahoo encryption key stay unchanged. Push remains optional and not activated by this update.

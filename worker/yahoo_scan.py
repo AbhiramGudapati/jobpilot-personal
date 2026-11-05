@@ -33,11 +33,13 @@ DAYS_BACK = min(int(os.environ.get('JOBPILOT_DAYS_BACK', '75')), 180)
 KEY_AAD = b'jobpilot-feed-v1'
 MATCH = re.compile(r'\b(interview|application|applied|candidate|recruit(?:er|ing|ment)|hiring|assessment|screening|offer letter|next steps?|scheduled|reschedul|position|job opening|virtual meeting|not moving forward|unfortunately)\b', re.I)
 MEETING = re.compile(r'https?://(?:[\w.-]*\.)?(?:meet\.google\.com|teams\.microsoft\.com|zoom\.us|webex\.com|whereby\.com|calendly\.com|hirevue\.com)[^\s<>"\']*', re.I)
-DATE_FRAGMENT = re.compile(r'\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun)[,\s]+(?:[A-Z][a-z]+\s+\d{1,2}|\d{1,2}\s+[A-Z][a-z]+)(?:,?\s+\d{4})?[^\n]{0,75}?\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b|\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,?\s+\d{4})?[^\n]{0,65}?\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b', re.I)
-# Some recruiters send numeric dates rather than 'November 6'. They should
-# be suggested for review, never silently treated as confirmed invitations.
-NUMERIC_DATE_TIME = re.compile(r'\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])/(?:20\d{2}|\d{2})[^\n]{0,65}?\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b', re.I)
-DATE_ONLY = re.compile(r'\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+20\d{2})?\b|\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])/(?:20\d{2}|\d{2})\b', re.I)
+# Text confirmations vary: "Nov. 6 at 2 p.m.", "November 6th at 2pm", or "11/6 at 2 PM".
+# Date-only emails stay in the review queue; no missing time is invented.
+MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+CLOCK = r"(?:0?[1-9]|1[0-2])(?::[0-5]\d)?\s*(?:a\.?\s*m\.?|p\.?\s*m\.?)"
+DATE_FRAGMENT = re.compile(rf"\b{MONTH}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+20\d{{2}})?[^\n]{{0,85}}?\b{CLOCK}(?=\W|$)", re.I)
+NUMERIC_DATE_TIME = re.compile(rf"\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])(?:/(?:20\d{{2}}|\d{{2}}))?[^\n]{{0,65}}?\b{CLOCK}(?=\W|$)", re.I)
+DATE_ONLY = re.compile(rf"\b{MONTH}\.?\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+20\d{{2}})?\b|\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])/(?:20\d{{2}}|\d{{2}})\b", re.I)
 
 TZ_MAP = {'CST': date_tz.gettz('America/Chicago'), 'CDT': date_tz.gettz('America/Chicago'), 'CT': date_tz.gettz('America/Chicago'), 'EST': date_tz.gettz('America/New_York'), 'EDT': date_tz.gettz('America/New_York'), 'ET': date_tz.gettz('America/New_York'), 'PST': date_tz.gettz('America/Los_Angeles'), 'PDT': date_tz.gettz('America/Los_Angeles'), 'PT': date_tz.gettz('America/Los_Angeles'), 'UTC': timezone.utc, 'GMT': timezone.utc}
 
@@ -151,19 +153,30 @@ def parse_ics(source: str) -> dict | None:
     }
 
 
+def normalized_date_phrase(value: str) -> str:
+    """Clean recruiter punctuation without changing the appointment's time zone."""
+    value = re.sub(r'\b([ap])\s*\.?\s*m\.?(?=\W|$)', lambda m: m.group(1).upper()+'M', value, flags=re.I)
+    value = re.sub(r'(\d)(?:st|nd|rd|th)\b', r'\1', value, flags=re.I)
+    value = re.sub(rf'\b({MONTH})\.(?=\s+\d)', r'\1', value, flags=re.I)
+    return value
+
+
 def parse_text_date(body: str, received: datetime) -> str | None:
-    for match in list(DATE_FRAGMENT.finditer(body[:8500])) + list(NUMERIC_DATE_TIME.finditer(body[:8500])):
-        fragment = match.group(0)
-        # Capture a trailing timezone abbreviation; preserve the user's local zone otherwise.
+    base = received.astimezone(ZoneInfo(DEFAULT_TZ)).replace(month=1, day=1, hour=12, minute=0, second=0, microsecond=0, tzinfo=None)
+    matches = sorted([*DATE_FRAGMENT.finditer(body[:8500]), *NUMERIC_DATE_TIME.finditer(body[:8500])], key=lambda m:m.start())
+    for match in matches:
+        fragment = normalized_date_phrase(match.group(0))
         trailing_zone = re.match(r'^\s*(CT|CDT|CST|ET|EDT|EST|PT|PDT|PST|UTC|GMT)\b', body[match.end():match.end() + 12], re.I)
         if trailing_zone:
             fragment += ' ' + trailing_zone.group(1).upper()
-        # Keep the default naive: dateutil otherwise inherits received email's UTC tzinfo.
-        base = received.astimezone(ZoneInfo(DEFAULT_TZ)).replace(month=1, day=1, hour=12, minute=0, second=0, microsecond=0, tzinfo=None)
         try:
             found = date_parser.parse(fragment, fuzzy=True, default=base, tzinfos=TZ_MAP)
             if found.tzinfo is None:
                 found = found.replace(tzinfo=ZoneInfo(DEFAULT_TZ))
+            if not re.search(r'\b20\d{2}\b', fragment) and (found - received).days < -150:
+                found = found.replace(year=found.year + 1)
+            if abs((found - received).days) > 370:
+                continue
             return found.isoformat()
         except (ValueError, OverflowError):
             continue
@@ -171,13 +184,13 @@ def parse_text_date(body: str, received: datetime) -> str | None:
 
 
 def parse_text_day(body: str, received: datetime) -> str | None:
-    # A date without a reliable time is listed as 'time to confirm' rather
-    # than invented as a midnight/9 AM appointment.
     base = received.astimezone(ZoneInfo(DEFAULT_TZ)).replace(month=1, day=1, hour=12, minute=0, second=0, microsecond=0, tzinfo=None)
     for match in DATE_ONLY.finditer(body[:8500]):
-        fragment = re.sub(r'(\d)(?:st|nd|rd|th)\b', r'\1', match.group(0), flags=re.I)
+        fragment = normalized_date_phrase(match.group(0))
         try:
             candidate = date_parser.parse(fragment, default=base, dayfirst=False)
+            if not re.search(r'\b20\d{2}\b', fragment) and (candidate.date() - base.date()).days < -150:
+                candidate = candidate.replace(year=candidate.year + 1)
             if abs((candidate.date() - received.astimezone(ZoneInfo(DEFAULT_TZ)).date()).days) > 370:
                 continue
             return candidate.date().isoformat()
@@ -185,6 +198,15 @@ def parse_text_day(body: str, received: datetime) -> str | None:
             continue
     return None
 
+
+def explicit_interview_confirmation(subject: str, body: str) -> bool:
+    """Only affirmative text confirmation is eligible for automatic import."""
+    short = (subject + ' ' + body[:2500]).lower()
+    if not re.search(r'\binterview\b', short):
+        return False
+    if re.search(r'\b(?:availability|available times|please choose|please select|would you be available|are you available|propose a time|schedule your interview|reschedul(?:e|ing))\b', short):
+        return False
+    return bool(re.search(r'\b(?:interview\s+confirm(?:ation|ed)?|confirmed interview|interview is (?:scheduled|confirmed)|you are scheduled to interview|following up to confirm|meeting invitation for your|interview on (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b', short))
 
 def classify(subject: str, body: str) -> tuple[str, str | None]:
     text = (subject + ' ' + body[:2600]).lower()
@@ -206,22 +228,28 @@ def classify(subject: str, body: str) -> tuple[str, str | None]:
 
 
 def company_from(subject: str, sender: str, address: str, body: str) -> str:
-    for string in (subject[:160], body[:400]):
+    for string in (subject[:160], body[:550]):
         for pattern in (r'\b(?:interview|position|opportunity|application)\s+(?:with|at|from)\s+([A-Z][\w& .\'-]{2,45})', r'\b(?:company|organization)\s*:\s*([A-Z][\w& .\'-]{2,45})'):
             match = re.search(pattern, string, re.I)
             if match:
                 return re.split(r'\s+(?:on|for|has|is|to|and)\s+|[,;|\n]', match.group(1))[0].strip(' .')[:60]
+    domain = address.rsplit('@', 1)[-1].lower() if '@' in address else ''
+    if domain.endswith(('.vcuhealth.org', 'vcuhealth.org')):
+        return 'VCU Health'
+    if domain.endswith(('.scotts.com', 'scotts.com', '.scottsmiraclegro.com', 'scottsmiraclegro.com')):
+        return 'Scotts Miracle-Gro'
     bad = {'recruiting', 'recruitment', 'talent', 'workday', 'greenhouse', 'lever', 'notifications', 'no-reply', 'noreply', 'jobvite'}
     candidate = re.sub(r'\b(?:recruiting|recruitment|talent acquisition|careers|jobs|team|human resources)\b', '', sender, flags=re.I).strip(' -|')
     if candidate and candidate.lower() not in bad and len(candidate) <= 60 and '@' not in candidate:
-        return candidate
-    domain = address.rsplit('@', 1)[-1].split('.')[0] if '@' in address else ''
-    return domain.title() if domain and domain not in bad and domain not in ('gmail', 'yahoo', 'outlook') else ''
+        if not re.fullmatch(r'[A-Z][a-z]+\s+[A-Z][a-z]+', candidate):
+            return candidate
+    domain_part = domain.split('.')[0] if domain else ''
+    return domain_part.title() if domain_part and domain_part not in bad and domain_part not in ('gmail', 'yahoo', 'outlook', 'hotmail', 'icloud') else ''
 
 
 def role_from(subject: str, body: str) -> str:
     text = subject + ' ' + body[:750]
-    for pattern in (r'\b(?:role|position|job title)\s*:\s*([^\n|;]{4,90})', r'\b(?:interview|application)\s+for\s+(?:the\s+)?([^|,.\n]{4,85})', r'\bfor the\s+([^|,.\n]{4,85})\s+(?:role|position)'):
+    for pattern in (r'\b(?:role|position|job title)\s*:\s*([^\n|;]{4,90})', r'\b(?:interview|application)\s+for\s+(?:the\s+)?([^|,.\n]{4,85})', r'\bfor the\s+([^|,.\n]{4,85})\s+(?:role|position)', r'\byour\s+([^|,.\n]{4,85}?)\s+interview\b'):
         match = re.search(pattern, text, re.I)
         if match:
             result = re.split(r'\s+(?:at|with|on|scheduled|and)\b', match.group(1), maxsplit=1)[0].strip(' .,:')
@@ -279,7 +307,7 @@ def normalize_message(msg, uid: str = '') -> dict | None:
         'location': parsed_ics.get('location') if parsed_ics else '',
         'meetingLink': link,
         'cancelled': bool(parsed_ics and parsed_ics.get('cancelled')),
-        'dateConfidence': ('high' if when and parsed_ics else 'medium' if when else 'date-only' if date_only else 'none'),
+        'dateConfidence': ('high' if when and parsed_ics else 'confirmed-text' if when and category == 'interview' and explicit_interview_confirmation(subject, body) else 'medium' if when else 'date-only' if date_only else 'none'),
     }
     return result
 

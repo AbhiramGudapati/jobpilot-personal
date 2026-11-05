@@ -30,12 +30,12 @@ def test_november_6_shows_two_interviews_and_review_flow():
         ]}
         page.evaluate('(feed) => window.__jobpilotTest.mergeFeed(feed)', data)
         page.wait_for_timeout(80)
-        assert page.locator('#metricInterviews').inner_text()=='3'
-        assert '1 on calendar · 2 to confirm' in page.locator('#metricInterviewHint').inner_text()
+        assert page.locator('#metricInterviews').inner_text()=='1'
+        assert '1 scheduled · 2 emails to review' in page.locator('#metricInterviewHint').inner_text()
         assert page.locator('#nextInterview .interview-list-item').count()==3
         page.locator('[data-view="calendar"]').last.click()
         page.locator('[data-select-day="2026-11-06"]').click()
-        assert '2 interviews' in page.locator('#selectedDateCount').inner_text()
+        assert '1 scheduled interview · 1 email to review' in page.locator('#selectedDateCount').inner_text()
         assert page.locator('#selectedDayEvents .detail-event').count()==2
         assert page.locator('#selectedDayEvents .tentative-event').count()==1
         assert 'VCU Health' in page.locator('#selectedDayEvents').inner_text()
@@ -46,7 +46,7 @@ def test_november_6_shows_two_interviews_and_review_flow():
         assert 'Review emails' in page.locator('#inbox-heading').inner_text()
         assert page.locator('#mail-text-hr-6').count()==1
         page.locator('#mail-text-hr-6 [data-approve-mail]').click()
-        assert page.locator('#metricInterviewHint').inner_text().startswith('2 on calendar')
+        assert page.locator('#metricInterviewHint').inner_text().startswith('2 scheduled')
         page.locator('[data-view="calendar"]').last.click()
         page.locator('[data-select-day="2026-11-06"]').click()
         assert page.locator('#selectedDayEvents .detail-event').count()==2
@@ -57,14 +57,14 @@ def test_november_6_shows_two_interviews_and_review_flow():
         assert page.locator('#selectedDayEvents .detail-event').count()==2
         # Date only entry is visible, user must supply actual start time.
         page.locator('[data-select-day="2026-11-07"]').click()
-        assert '1 interview' in page.locator('#selectedDateCount').inner_text()
+        assert '0 scheduled interviews · 1 email to review' in page.locator('#selectedDateCount').inner_text()
         assert 'Time to confirm' in page.locator('#selectedDayEvents').inner_text()
         page.locator('#selectedDayEvents [data-find-mail="date-only-7"]').click()
         page.locator('#mail-date-only-7 [data-edit-mail-event]').click()
         assert page.locator('#field-when').input_value()==''
         page.locator('#field-when').fill('2026-11-07T09:30')
         page.locator('#submitEditor').click()
-        assert page.locator('#metricInterviewHint').inner_text().startswith('3 on calendar')
+        assert page.locator('#metricInterviewHint').inner_text().startswith('3 scheduled')
         # Persisted after reload.
         persisted = page.evaluate('JSON.parse(localStorage.getItem("jobpilot.personal.v2"))')
         assert len([e for e in persisted['events'] if e['type']=='Interview'])==3

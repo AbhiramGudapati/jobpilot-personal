@@ -42,13 +42,13 @@ def test_same_interview_two_emails_one_appointment_but_real_same_day_multiple_vi
             mail('pending-b','First Company','Operations Analyst','2026-11-06T16:00:00-06:00'),
         ]}
         page.evaluate('(feed)=>window.__jobpilotTest.mergeFeed(feed)',feed)
-        assert page.locator('#metricInterviews').inner_text()=='6',page.locator('#metricInterviews').inner_text()
+        assert page.locator('#metricInterviews').inner_text()=='1',page.locator('#metricInterviews').inner_text()
         db=page.evaluate('window.__jobpilotTest.getDb()')
         assert len(db['events'])==1
         assert next(m['status'] for m in db['mailbox'] if m['id']=='mail-2') == 'related'
         page.locator('[data-view="calendar"]').last.click()
         page.locator('[data-select-day="2026-11-06"]').click()
-        assert '6 interviews' in page.locator('#selectedDateCount').inner_text()
+        assert '1 scheduled interview · 5 emails to review' in page.locator('#selectedDateCount').inner_text()
         assert page.locator('#selectedDayEvents .detail-event').count()==6
         # Approving a second mail for existing appointment must not add a second event.
         page.locator('[data-view="inbox"]').last.click()

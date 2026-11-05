@@ -171,4 +171,4 @@ def test_scanner_includes_older_invites_and_archive(monkeypatch):
     result=scan.scan_mailbox()
     assert len(result)==2
     assert {m['subject'].split()[0] for m in result} == {'Older','Archived'}
-    assert all(m['when'] and m['dateConfidence']=='medium' for m in result)
+    assert all(m['when'] and m['dateConfidence']=='confirmed-text' for m in result)
