@@ -135,3 +135,8 @@ Repeat confirmation messages with the same company, role, and interview start ti
 ## Version 1.6: Accurate November 6 interview parsing
 
 Fixes recruiter time formats such as `Friday, Nov. 6 at 2 p.m.`. Written confirmation with an exact appointment can be added to Calendar, marked as imported from text so the user can verify the time zone. Date-only/ambiguous emails are shown for review but **are not counted as scheduled interviews**. SMG and Scotts Miracle-Gro are recognized as the same employer alias; distinct roles and times remain separate when confirmed. A previously seen, pending message can be improved after a scanner update without duplicates. Existing device data and Yahoo encryption key stay unchanged. Push remains optional and not activated by this update.
+
+
+## v1.8 — Figma mobile interface refresh
+
+A visual-only responsive redesign was implemented and browser-tested in 390px iPhone light and dark views. It adds a prominent next-interview card, quieter summary tiles, better-spaced calendar/review panels, larger touch targets and a floating iPhone bottom navigation. It keeps all existing HTML IDs, event listeners, Yahoo scanning, local storage, encryption, event matching and permissions unchanged. See the [editable Figma mockups](https://www.figma.com/design/69DgNrs4UCK1zWndWt15IE) for Home, Calendar and Yahoo Review screens. No Figma subscription or paid UI kit is needed; the reusable local components were created with free library access. No Cloudflare push backend was deployed.
