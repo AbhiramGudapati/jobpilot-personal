@@ -28,12 +28,17 @@ from dateutil import parser as date_parser
 from dateutil import tz as date_tz
 
 DEFAULT_TZ = os.environ.get('JOBPILOT_TIMEZONE', 'America/Chicago')
-MAX_MESSAGES = min(int(os.environ.get('JOBPILOT_MAX_MESSAGES', '300')), 600)
+MAX_MESSAGES = min(int(os.environ.get('JOBPILOT_MAX_MESSAGES', '450')), 600)
 DAYS_BACK = min(int(os.environ.get('JOBPILOT_DAYS_BACK', '75')), 180)
 KEY_AAD = b'jobpilot-feed-v1'
 MATCH = re.compile(r'\b(interview|application|applied|candidate|recruit(?:er|ing|ment)|hiring|assessment|screening|offer letter|next steps?|scheduled|reschedul|position|job opening|virtual meeting|not moving forward|unfortunately)\b', re.I)
 MEETING = re.compile(r'https?://(?:[\w.-]*\.)?(?:meet\.google\.com|teams\.microsoft\.com|zoom\.us|webex\.com|whereby\.com|calendly\.com|hirevue\.com)[^\s<>"\']*', re.I)
 DATE_FRAGMENT = re.compile(r'\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun)[,\s]+(?:[A-Z][a-z]+\s+\d{1,2}|\d{1,2}\s+[A-Z][a-z]+)(?:,?\s+\d{4})?[^\n]{0,75}?\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b|\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,?\s+\d{4})?[^\n]{0,65}?\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b', re.I)
+# Some recruiters send numeric dates rather than 'November 6'. They should
+# be suggested for review, never silently treated as confirmed invitations.
+NUMERIC_DATE_TIME = re.compile(r'\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])/(?:20\d{2}|\d{2})[^\n]{0,65}?\b\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b', re.I)
+DATE_ONLY = re.compile(r'\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+20\d{2})?\b|\b(?:0?[1-9]|1[0-2])/(?:0?[1-9]|[12]\d|3[01])/(?:20\d{2}|\d{2})\b', re.I)
+
 TZ_MAP = {'CST': date_tz.gettz('America/Chicago'), 'CDT': date_tz.gettz('America/Chicago'), 'CT': date_tz.gettz('America/Chicago'), 'EST': date_tz.gettz('America/New_York'), 'EDT': date_tz.gettz('America/New_York'), 'ET': date_tz.gettz('America/New_York'), 'PST': date_tz.gettz('America/Los_Angeles'), 'PDT': date_tz.gettz('America/Los_Angeles'), 'PT': date_tz.gettz('America/Los_Angeles'), 'UTC': timezone.utc, 'GMT': timezone.utc}
 
 
@@ -147,7 +152,7 @@ def parse_ics(source: str) -> dict | None:
 
 
 def parse_text_date(body: str, received: datetime) -> str | None:
-    for match in DATE_FRAGMENT.finditer(body[:8500]):
+    for match in list(DATE_FRAGMENT.finditer(body[:8500])) + list(NUMERIC_DATE_TIME.finditer(body[:8500])):
         fragment = match.group(0)
         # Capture a trailing timezone abbreviation; preserve the user's local zone otherwise.
         trailing_zone = re.match(r'^\s*(CT|CDT|CST|ET|EDT|EST|PT|PDT|PST|UTC|GMT)\b', body[match.end():match.end() + 12], re.I)
@@ -160,6 +165,22 @@ def parse_text_date(body: str, received: datetime) -> str | None:
             if found.tzinfo is None:
                 found = found.replace(tzinfo=ZoneInfo(DEFAULT_TZ))
             return found.isoformat()
+        except (ValueError, OverflowError):
+            continue
+    return None
+
+
+def parse_text_day(body: str, received: datetime) -> str | None:
+    # A date without a reliable time is listed as 'time to confirm' rather
+    # than invented as a midnight/9 AM appointment.
+    base = received.astimezone(ZoneInfo(DEFAULT_TZ)).replace(month=1, day=1, hour=12, minute=0, second=0, microsecond=0, tzinfo=None)
+    for match in DATE_ONLY.finditer(body[:8500]):
+        fragment = re.sub(r'(\d)(?:st|nd|rd|th)\b', r'\1', match.group(0), flags=re.I)
+        try:
+            candidate = date_parser.parse(fragment, default=base, dayfirst=False)
+            if abs((candidate.date() - received.astimezone(ZoneInfo(DEFAULT_TZ)).date()).days) > 370:
+                continue
+            return candidate.date().isoformat()
         except (ValueError, OverflowError):
             continue
     return None
@@ -230,6 +251,9 @@ def normalize_message(msg, uid: str = '') -> dict | None:
     when = parsed_ics.get('when') if parsed_ics else None
     if not when and category in ('interview', 'followup', 'assessment'):
         when = parse_text_date(body, received)
+    date_only = None
+    if not when and category == 'interview' and not parsed_ics:
+        date_only = parse_text_day(subject + ' ' + body, received)
     link = next(iter(MEETING.findall(body + ' ' + (parsed_ics.get('meetingLink', '') if parsed_ics else ''))), '')
     if not link and parsed_ics and re.match(r'^https?://', parsed_ics.get('meetingLink', ''), re.I):
         link = parsed_ics['meetingLink']
@@ -248,13 +272,14 @@ def normalize_message(msg, uid: str = '') -> dict | None:
         'role': role_from(subject, body),
         'preview': body[:230],
         'when': when,
+        'dateOnly': date_only,
         'end': parsed_ics.get('end') if parsed_ics else None,
         'calendarUid': parsed_ics.get('calendarUid') if parsed_ics else '',
         'title': parsed_ics.get('title') if parsed_ics else '',
         'location': parsed_ics.get('location') if parsed_ics else '',
         'meetingLink': link,
         'cancelled': bool(parsed_ics and parsed_ics.get('cancelled')),
-        'dateConfidence': ('high' if when and parsed_ics else 'medium' if when else 'none'),
+        'dateConfidence': ('high' if when and parsed_ics else 'medium' if when else 'date-only' if date_only else 'none'),
     }
     return result
 
@@ -264,34 +289,63 @@ def scan_mailbox() -> list[dict]:
     password = os.environ['YAHOO_APP_PASSWORD'].strip()
     if not user or not password:
         raise RuntimeError('Yahoo credentials missing')
-    results = []
+    # Inbox is primary. Archive is searched too because calendar invitations can
+    # be moved automatically by Yahoo filters or archived after acceptance.
+    # Counts remain bounded for the free scheduled GitHub runner.
+    results: dict[str, dict] = {}
     with imaplib.IMAP4_SSL('imap.mail.yahoo.com', 993, timeout=30) as client:
         client.login(user, password)
-        typ, _ = client.select('INBOX', readonly=True)
-        if typ != 'OK':
-            raise RuntimeError('Could not select Yahoo inbox')
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=DAYS_BACK)).strftime('%d-%b-%Y')
-        typ, payload = client.uid('search', None, 'SINCE', cutoff)
-        if typ != 'OK':
-            raise RuntimeError('Yahoo inbox search failed')
-        ids = (payload[0] or b'').split()[-MAX_MESSAGES:]
-        for raw_uid in reversed(ids):
-            uid = raw_uid.decode('ascii', errors='replace')
-            typ, response = client.uid('fetch', raw_uid, '(BODY.PEEK[])')
-            if typ != 'OK':
-                continue
-            raw = next((part[1] for part in response if isinstance(part, tuple) and isinstance(part[1], bytes)), None)
-            if not raw:
-                continue
+        now_utc = datetime.now(timezone.utc)
+        cutoff = (now_utc - timedelta(days=DAYS_BACK)).strftime('%d-%b-%Y')
+        older_cutoff = (now_utc - timedelta(days=min(180, max(DAYS_BACK, 120)))).strftime('%d-%b-%Y')
+        for folder, budget in (('INBOX', min(MAX_MESSAGES, 370)), ('Archive', min(100, MAX_MESSAGES // 4))):
             try:
-                parsed = normalize_message(BytesParser(policy=policy.default).parsebytes(raw), uid)
-                if parsed:
-                    results.append(parsed)
-            except Exception:
-                # Skip a single malformed mail without leaking its content to logs.
+                typ, _ = client.select(folder, readonly=True)
+            except (imaplib.IMAP4.error, OSError):
+                typ = 'NO'
+            if typ != 'OK':
+                if folder == 'INBOX':
+                    raise RuntimeError('Could not select Yahoo inbox')
                 continue
+            typ, payload = client.uid('search', None, 'SINCE', cutoff)
+            if typ != 'OK':
+                if folder == 'INBOX':
+                    raise RuntimeError('Yahoo inbox search failed')
+                continue
+            # Reserve slots for older interview-related subjects even if many
+            # newer non-recruitment messages have filled the inbox.
+            recent_budget = min(budget, 245 if folder == 'INBOX' else 35)
+            recent = (payload[0] or b'').split()[-recent_budget:]
+            targeted = set()
+            for keyword in ('interview', 'scheduled', 'confirmation', 'invitation'):
+                try:
+                    ttyp, tdata = client.uid('search', None, 'SINCE', older_cutoff, 'SUBJECT', keyword)
+                    if ttyp == 'OK' and tdata:
+                        targeted.update((tdata[0] or b'').split()[-100:])
+                except (imaplib.IMAP4.error, OSError):
+                    pass
+            prioritized = sorted(targeted, key=lambda value: int(value))[-max(0, budget-len(recent)):]
+            ids = sorted(set(recent) | set(prioritized), key=lambda value: int(value), reverse=True)
+            for raw_uid in ids:
+                uid = raw_uid.decode('ascii', errors='replace')
+                try:
+                    ftyp, response = client.uid('fetch', raw_uid, '(BODY.PEEK[])')
+                except (imaplib.IMAP4.error, OSError):
+                    continue
+                if ftyp != 'OK':
+                    continue
+                raw = next((part[1] for part in response if isinstance(part, tuple) and isinstance(part[1], bytes)), None)
+                if not raw:
+                    continue
+                try:
+                    parsed = normalize_message(BytesParser(policy=policy.default).parsebytes(raw), folder + ':' + uid)
+                    if parsed and parsed['id'] not in results:
+                        results[parsed['id']] = parsed
+                except Exception:
+                    # Never print email bodies or addresses to public Actions logs.
+                    continue
         client.close()
-    return results
+    return sorted(results.values(), key=lambda m: m['receivedAt'], reverse=True)
 
 
 def seal(data: dict, key_hex: str) -> dict:

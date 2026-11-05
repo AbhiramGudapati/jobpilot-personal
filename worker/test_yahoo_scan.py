@@ -118,3 +118,57 @@ def test_push_cancellation_latest_message_wins(monkeypatch):
     cancelled = {**original, 'cancelled':True, 'receivedAt':'2026-10-02T00:00:00+00:00'}
     scan.sync_cloud_reminders([original, cancelled])
     assert payloads[0]['reminders']==[]
+
+
+def test_numeric_date_and_date_only_visible_in_review():
+    received = datetime(2026, 10, 30, tzinfo=timezone.utc)
+    assert scan.parse_text_date('Interview: 11/06/2026 at 10:30 AM CT', received).startswith('2026-11-06T10:30')
+    assert scan.parse_text_day('Friday, November 6th, 2026. Time will be sent later.', received) == '2026-11-06'
+    raw = (b'From: Recruiting <recruitment@example.com>\r\n'
+           b'Subject: Interview Friday November 6th\r\n'
+           b'Message-ID: <dateonly@demo.test>\r\n'
+           b'Date: Fri, 30 Oct 2026 12:00:00 +0000\r\n'
+           b'Content-Type: text/plain; charset=utf-8\r\n\r\n'
+           b'Your interview is on Friday November 6th. We will send the time later.')
+    m = scan.normalize_message(BytesParser(policy=policy.default).parsebytes(raw),'u1')
+    assert m['dateOnly']=='2026-11-06'
+    assert m['dateConfidence']=='date-only'
+    assert m['when'] is None
+
+
+def test_scanner_includes_older_invites_and_archive(monkeypatch):
+    def raw(company, identifier):
+        return (f'From: Recruiting <recruiting@example.com>\r\n'
+                f'Subject: {company} interview confirmation\r\n'
+                f'Message-ID: <{identifier}@example.com>\r\n'
+                'Date: Fri, 30 Oct 2026 12:00:00 +0000\r\n'
+                'Content-Type: text/plain; charset=utf-8\r\n\r\n'
+                'Interview Friday November 6th, 2026 at 11:00 AM CST.').encode()
+    class MockIMAP:
+        folder = 'INBOX'
+        def __init__(self,*_,**__): pass
+        def __enter__(self): return self
+        def __exit__(self,*_): return False
+        def login(self,*_): return 'OK',[]
+        def select(self,folder,readonly=True): self.folder=folder; return 'OK',[b'1']
+        def uid(self,action,*args):
+            if action=='search':
+                if self.folder=='INBOX':
+                    if 'SUBJECT' in args: return 'OK',[b'10'] if args[-1]=='interview' else [b'']
+                    return 'OK',[b'500 501 502']
+                if 'SUBJECT' in args: return 'OK',[b'7'] if args[-1]=='interview' else [b'']
+                return 'OK',[b'']
+            if action=='fetch':
+                identifier=args[0].decode()
+                if identifier in {'10','7'}:
+                    return 'OK',[(b'msg',raw('Archived' if self.folder=='Archive' else 'Older',identifier))]
+                return 'OK',[]
+            raise AssertionError((action,args))
+        def close(self): return 'OK',[]
+    monkeypatch.setenv('YAHOO_EMAIL','user@yahoo.com')
+    monkeypatch.setenv('YAHOO_APP_PASSWORD','synthetic-not-real')
+    monkeypatch.setattr(scan.imaplib, 'IMAP4_SSL', MockIMAP)
+    result=scan.scan_mailbox()
+    assert len(result)==2
+    assert {m['subject'].split()[0] for m in result} == {'Older','Archived'}
+    assert all(m['when'] and m['dateConfidence']=='medium' for m in result)

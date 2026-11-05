@@ -1,6 +1,12 @@
 name: Scan Yahoo and publish encrypted JobPilot feed
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - worker/yahoo_scan.py
+      - worker/test_yahoo_scan.py
+      - .github/workflows/yahoo-check.yml
   schedule:
     - cron: '11,41 * * * *'
 concurrency:
@@ -13,7 +19,7 @@ permissions:
 jobs:
   scan-and-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

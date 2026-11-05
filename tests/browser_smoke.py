@@ -1,7 +1,7 @@
 """In-memory browser UI smoke test for environments that block external Chromium navigation."""
 from playwright.sync_api import sync_playwright
 from pathlib import Path
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent
 HTML=(ROOT/'index.html').read_text()
 import re
 HTML=re.sub(r'<meta http-equiv="Content-Security-Policy"[^>]*>', '', HTML)
@@ -54,7 +54,7 @@ with sync_playwright() as p:
     assert date and not date.endswith('Z')
     assert page.locator('#field-duration').input_value()=='15'
     page.locator('#cancelEditor').click()
-    page.locator('[data-view="settings"]').last.click()
+    page.locator('.settings-shortcut').click()
     with page.expect_download() as d:page.locator('#exportJobsCsv').click()
     print('CSV:',d.value.suggested_filename)
     with page.expect_download() as d:page.locator('#exportCalendar').click()

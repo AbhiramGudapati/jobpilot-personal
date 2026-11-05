@@ -83,18 +83,21 @@
   let selectedDate = new Date(now().getFullYear(), now().getMonth(), now().getDate());
   let editorMode = null;
   let editorId = '';
+  let editorMailId = '';
   let toastTimeout;
   let syncBusy = false;
-  // Remember the existing Yahoo encryption key on a trusted personal device.
-  // If the old session key still exists, migrate it once to persistent storage.
+  // A trusted personal device remembers the encryption key after the first unlock.
+  // Migrate an existing session-only unlock automatically when the upgrade loads.
   const validFeedKey = candidate => /^[a-f0-9]{64}$/i.test(candidate || '');
   function rememberedFeedKey() {
     const persistent = localStorage.getItem(DEVICE_KEY) || '';
     const session = sessionStorage.getItem(SESSION_KEY) || '';
     const candidate = validFeedKey(persistent) ? persistent : validFeedKey(session) ? session : '';
     if (!candidate) return '';
-    try { localStorage.setItem(DEVICE_KEY, candidate.toLowerCase()); sessionStorage.removeItem(SESSION_KEY); }
-    catch { /* Browser may prohibit storage; retain current session access. */ }
+    try {
+      localStorage.setItem(DEVICE_KEY, candidate.toLowerCase());
+      sessionStorage.removeItem(SESSION_KEY);
+    } catch { /* Browser may disallow persistent storage; fall back to the current session. */ }
     return candidate.toLowerCase();
   }
   let key = rememberedFeedKey();
@@ -127,12 +130,29 @@
   function futureEvents() { return db.events.filter(e => !e.cancelled && isValid(parseDate(e.when)) && parseDate(e.when) >= now()).sort((a, b) => parseDate(a.when) - parseDate(b.when)); }
   function jobsActive() { return db.jobs.filter(j => !['Rejected', 'Offer'].includes(j.stage)); }
   function pendingMails() { return db.mailbox.filter(m => m.status === 'pending'); }
+  function pendingInterviewCandidates() {
+    return pendingMails().filter(m => m.category === 'interview' && !m.cancelled &&
+      ((m.when && isValid(parseDate(m.when))) || /^\d{4}-\d{2}-\d{2}$/.test(m.dateOnly || '')) &&
+      !db.events.some(e => e.sourceId === m.id || (m.calendarUid && e.calendarUid === m.calendarUid)));
+  }
+  function interviewLeads(includePast = false) {
+    const saved = db.events.filter(e => e.type === 'Interview' && !e.cancelled && isValid(parseDate(e.when)))
+      .map(e => ({kind: 'saved', id: e.id, when: e.when, day: dayKey(parseDate(e.when)), title: e.title || 'Interview', company: e.company || '', meetingLink: e.meetingLink || ''}));
+    const tentative = pendingInterviewCandidates().map(m => ({kind: 'review', id: m.id, when: m.when || '',
+      day: m.when ? dayKey(parseDate(m.when)) : m.dateOnly,
+      title: m.title || m.role || m.subject || 'Interview', company: m.company || '', meetingLink: m.meetingLink || ''}));
+    const today = dayKey(now());
+    return [...saved, ...tentative].filter(x => includePast || (x.when ? parseDate(x.when) >= now() : x.day >= today))
+      .sort((a,b) => a.day.localeCompare(b.day) || (a.when || '9999').localeCompare(b.when || '9999') || a.title.localeCompare(b.title));
+  }
+  const leadDate = e => e.when ? fmtDateTime(e.when) : `${isoDate(e.day)} · time to confirm`;
   function actionEvents() { return db.events.filter(e => !e.cancelled && !e.completed && ['Follow-up', 'Deadline'].includes(e.type)).sort((a, b) => parseDate(a.when) - parseDate(b.when)); }
 
   function paint() {
     $('#todayLabel').textContent = new Date().toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'});
     $('#metricActive').textContent = jobsActive().length;
-    $('#metricInterviews').textContent = futureEvents().filter(e => e.type === 'Interview').length;
+    $('#metricInterviews').textContent = interviewLeads().length;
+    $('#metricInterviewHint').textContent = `${interviewLeads().filter(x=>x.kind==='saved').length} saved · ${interviewLeads().filter(x=>x.kind==='review').length} to review`;
     $('#metricFollowups').textContent = actionEvents().length;
     $('#metricReview').textContent = pendingMails().length;
     $('#sidebarReviewCount').textContent = pendingMails().length;
@@ -146,23 +166,26 @@
 
   }
   function renderOverview() {
-    const hour = now().getHours();
-    $('#greetingText').textContent = (hour < 12 ? 'Good morning.' : hour < 18 ? 'Good afternoon.' : 'Good evening.') + ' Here is what is happening with your applications.';
-    const interview = futureEvents().find(e => e.type === 'Interview');
-    const spot = $('#nextInterview');
-    if (!interview) spot.innerHTML = empty('No interviews coming up. Add one or connect Yahoo to detect invitations.', '▦');
-    else {
-      const link = safeUrl(interview.meetingLink);
-      spot.innerHTML = `<div class="spotlight"><span class="spotlight-tag">UPCOMING INTERVIEW</span><h3>${esc(interview.title)}</h3><p class="company">${esc(interview.company || 'Company not specified')}</p><div class="spotlight-lines"><span>▦ &nbsp; ${esc(fmtDateTime(interview.when))}</span>${link ? `<span>↗ &nbsp; <a class="inline-link" href="${esc(link)}" target="_blank" rel="noopener noreferrer">Join meeting</a></span>` : ''}${interview.notes ? `<span>✎ &nbsp; ${esc(interview.notes.slice(0, 110))}</span>` : ''}</div><span class="countdown">${esc(relative(interview.when))}</span><div class="mail-actions"><button type="button" class="button button-quiet small" data-edit-event="${esc(interview.id)}">Edit details</button></div></div>`;
-    }
-    $('#overviewSchedule').innerHTML = futureEvents().slice(0, 5).map(e => `<div class="item-row"><div class="item-icon">${e.type === 'Interview' ? '▦' : '◷'}</div><div class="item-main"><div class="item-title">${esc(e.title)}</div><div class="item-meta">${esc(e.company || e.type)} · ${esc(fmtDateTime(e.when))}</div></div><span class="row-right">${esc(relative(e.when))}</span></div>`).join('') || empty('Your schedule is clear.');
+    const upcoming = interviewLeads().slice(0, 12);
+    $('#greetingText').textContent = 'Your interviews, applications and next steps. All in one place.';
+    $('#nextInterview').innerHTML = upcoming.map(e => `<div class="interview-list-item ${e.kind === 'review' ? 'tentative-item' : ''}">
+      <div class="interview-datebox"><strong>${esc(e.when ? fmtTime(e.when) : '—')}</strong><span>${esc(isoDate(e.day))}</span></div>
+      <div class="interview-item-body"><div class="interview-heading">${esc(e.company || e.title)}</div><div class="interview-subtitle">${esc(e.company ? e.title : 'Interview')}</div>
+        <span class="interview-state ${e.kind === 'review' ? 'pending' : ''}">${e.kind === 'review' ? 'Needs confirmation' : 'On calendar'}</span>
+      </div><button type="button" class="button button-quiet small" ${e.kind==='review' ? `data-find-mail="${esc(e.id)}"` : `data-open-day="${esc(e.day)}"`}>${e.kind === 'review' ? 'Review' : 'View'}</button>
+    </div>`).join('') || empty('No upcoming interviews found yet. Check Yahoo Inbox or add one manually.', '▦');
+    const nonInterviews = futureEvents().filter(e=>e.type !== 'Interview');
+    $('#overviewSchedule').innerHTML = nonInterviews.slice(0, 6).map(e => `<div class="item-row"><div class="item-icon">${e.type === 'Deadline' ? '!' : '◷'}</div><div class="item-main"><div class="item-title">${esc(e.title)}</div><div class="item-meta">${esc(e.company || e.type)} · ${esc(fmtDateTime(e.when))}</div></div><button type="button" class="button button-quiet small" data-open-day="${esc(dayKey(parseDate(e.when)))}">View</button></div>`).join('') || empty('No other upcoming tasks.');
     const tasks = [];
-    const conflicts = futureEvents().filter(e => e.type === 'Interview' && conflicting(e, e.id).length).length;
-    if (conflicts) tasks.unshift(`<div class="item-row"><div class="item-icon">⚠</div><div class="item-main"><div class="item-title">${conflicts} overlapping interview${conflicts > 1 ? 's' : ''}</div><div class="item-meta">Check your calendar for timing conflicts</div></div><button type="button" class="button button-quiet small" data-view="calendar">Review</button></div>`);
-
-    for (const e of actionEvents().slice(0, 4)) tasks.push(`<div class="item-row"><div class="item-icon">✓</div><div class="item-main"><div class="item-title">${esc(e.title)}</div><div class="item-meta">${esc(fmtDateTime(e.when))}</div></div><button type="button" class="button button-quiet small" data-complete="${esc(e.id)}">Done</button></div>`);
-    if (pendingMails().length) tasks.unshift(`<div class="item-row"><div class="item-icon">✉</div><div class="item-main"><div class="item-title">Review ${pendingMails().length} Yahoo suggestion${pendingMails().length > 1 ? 's' : ''}</div><div class="item-meta">Suggested calendar and application changes</div></div><button type="button" class="button button-quiet small" data-view="inbox">Review</button></div>`);
-    $('#overviewTasks').innerHTML = tasks.slice(0, 5).join('') || empty('All caught up. Nothing needs attention.', '✓');
+    const confirmed = futureEvents().filter(e=>e.type==='Interview');
+    const clashes = confirmed.filter(e => conflicting(e,e.id).length);
+    if(clashes.length) tasks.push(`<div class="item-row"><div class="item-icon">!</div><div class="item-main"><div class="item-title">${clashes.length} overlapping events</div><div class="item-meta">Review times before your interviews</div></div><button type="button" class="button button-quiet small" data-view="calendar">Calendar</button></div>`);
+    const needsReview = interviewLeads().filter(x=>x.kind==='review').length;
+    if(needsReview) tasks.push(`<div class="item-row"><div class="item-icon">✉</div><div class="item-main"><div class="item-title">${needsReview} interview${needsReview===1?'':'s'} to confirm</div><div class="item-meta">Detected in Yahoo; check details and add to calendar</div></div><button type="button" class="button button-quiet small" data-view="calendar">Review</button></div>`);
+    for (const e of actionEvents().slice(0,3)) tasks.push(`<div class="item-row"><div class="item-icon">◷</div><div class="item-main"><div class="item-title">${esc(e.title)}</div><div class="item-meta">${esc(fmtDateTime(e.when))}</div></div><button type="button" class="button button-quiet small" data-complete="${esc(e.id)}">Done</button></div>`);
+    const otherMail = pendingMails().filter(m=>m.category!=='interview').length;
+    if(otherMail) tasks.push(`<div class="item-row"><div class="item-icon">✉</div><div class="item-main"><div class="item-title">${otherMail} other Yahoo update${otherMail===1?'':'s'}</div></div><button type="button" class="button button-quiet small" data-view="inbox">Review</button></div>`);
+    $('#overviewTasks').innerHTML = tasks.slice(0,6).join('') || empty('All caught up. Nothing needs attention.', '✓');
     const stageCounts = ['Applied', 'Screening', 'Interview', 'Final Round', 'Offer'];
     const total = Math.max(db.jobs.length, 1);
     $('#overviewPipeline').innerHTML = stageCounts.map(stage => { const count = db.jobs.filter(j => j.stage === stage).length; return `<div class="pipeline-item"><div class="pipeline-label"><span>${esc(stage)}</span><span>${count}</span></div><div class="progress-track"><div class="progress-fill" style="width:${count / total * 100}%"></div></div></div>`; }).join('');
@@ -170,22 +193,39 @@
   function renderCalendar() {
     const month = displayMonth.getMonth(), year = displayMonth.getFullYear();
     $('#calendarMonth').textContent = displayMonth.toLocaleDateString(undefined, {month: 'long', year: 'numeric'});
-    const inMonth = db.events.filter(e => { const d = parseDate(e.when); return isValid(d) && d.getFullYear() === year && d.getMonth() === month && !e.cancelled; });
-    $('#calendarCount').textContent = `${inMonth.length} scheduled item${inMonth.length === 1 ? '' : 's'}`;
-    const offset = new Date(year, month, 1).getDay();
-    const daysCount = new Date(year, month + 1, 0).getDate();
+    const confirmed = db.events.filter(e => !e.cancelled && isValid(parseDate(e.when)));
+    const tentative = pendingInterviewCandidates().map(m=>({...m, day: m.when ? dayKey(parseDate(m.when)) : m.dateOnly}));
+    const inMonth = confirmed.filter(e => {const d=parseDate(e.when);return d.getFullYear()===year&&d.getMonth()===month;});
+    const suggestedMonth = tentative.filter(m=>m.day.startsWith(`${year}-${String(month+1).padStart(2,'0')}`));
+    $('#calendarCount').textContent = `${inMonth.length} scheduled · ${suggestedMonth.length} to review`;
+    const offset = new Date(year, month, 1).getDay(), daysCount = new Date(year,month+1,0).getDate();
     const total = Math.ceil((offset + daysCount) / 7) * 7;
-    let html = '';
-    for (let i = 0; i < total; i++) {
-      const d = new Date(year, month, i - offset + 1), isThisMonth = d.getMonth() === month;
-      const matching = db.events.filter(e => { const dt = parseDate(e.when); return isValid(dt) && dayKey(dt) === dayKey(d) && !e.cancelled; });
-      const today = dayKey(d) === dayKey(now()), selected = dayKey(d) === dayKey(selectedDate);
-      html += `<button type="button" class="calendar-day ${isThisMonth ? '' : 'outside'} ${today ? 'today' : ''} ${selected ? 'selected' : ''}" data-select-day="${dayKey(d)}" aria-label="${esc(d.toDateString())}, ${matching.length} events" aria-pressed="${selected}"><span class="day-number">${d.getDate()}</span><span class="event-dots">${matching.slice(0, 4).map(e => `<i class="${e.type === 'Interview' ? 'interview' : e.type === 'Follow-up' ? 'followup' : e.type === 'Deadline' ? 'deadline' : 'other'}"></i>`).join('')}</span>${matching.length ? `<span class="day-title-preview">${esc(matching[0].title)}</span>` : ''}</button>`;
+    const eventsByDay = new Map();
+    for (const e of confirmed) {const day=dayKey(parseDate(e.when));if(!eventsByDay.has(day))eventsByDay.set(day,[]);eventsByDay.get(day).push({kind:'saved',item:e});}
+    for (const m of tentative) {if(!eventsByDay.has(m.day))eventsByDay.set(m.day,[]);eventsByDay.get(m.day).push({kind:'review',item:m});}
+    let html='';
+    for(let i=0;i<total;i++) {
+      const d=new Date(year,month,i-offset+1),day=dayKey(d),matching=eventsByDay.get(day)||[];
+      const interviews=matching.filter(x=>x.kind==='review'||x.item.type==='Interview').length;
+      const pending=matching.filter(x=>x.kind==='review').length;
+      const selected=day===dayKey(selectedDate);
+      html += `<button type="button" class="calendar-day ${d.getMonth()===month?'':'outside'} ${day===dayKey(now())?'today':''} ${selected?'selected':''}" data-select-day="${day}" aria-label="${esc(d.toDateString())}: ${interviews} interviews, ${pending} need review, ${matching.length} items" aria-pressed="${selected}"><span class="day-number">${d.getDate()}</span>${interviews ? `<span class="calendar-interview-count">${interviews} interview${interviews===1?'':'s'}</span>` : matching.length ? `<span class="calendar-other-count">${matching.length} task${matching.length===1?'':'s'}</span>` : ''}${pending?'<span class="calendar-needs-review">To check</span>':''}</button>`;
     }
-    $('#calendarGrid').innerHTML = html;
-    $('#selectedDateTitle').textContent = selectedDate.toLocaleDateString(undefined, {month: 'long', day: 'numeric', weekday: 'short'});
-    const events = db.events.filter(e => dayKey(parseDate(e.when)) === dayKey(selectedDate)).sort((a, b) => parseDate(a.when) - parseDate(b.when));
-    $('#selectedDayEvents').innerHTML = events.map(e => `<div class="detail-event ${e.type === 'Interview' ? 'interview-border' : e.type === 'Follow-up' ? 'followup-border' : e.type === 'Deadline' ? 'deadline-border' : ''}"><div class="time">${esc(fmtTime(e.when))}${e.cancelled ? ' · CANCELLED' : ''}${e.completed ? ' · COMPLETED' : ''} · ${durationOf(e)} min</div><h3>${esc(e.title)}</h3><p>${esc(e.company || e.type)}</p>${e.notes ? `<p>${esc(e.notes)}</p>` : ''}${safeUrl(e.meetingLink) ? `<p><a class="inline-link" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(e.meetingLink))}">Open meeting link ↗</a></p>` : ''}<div class="detail-actions"><button type="button" class="button button-quiet small" data-edit-event="${esc(e.id)}">Edit</button><button type="button" class="button button-quiet small" data-download-ics="${esc(e.id)}">.ics</button>${['Follow-up','Deadline'].includes(e.type) ? `<button type="button" class="button button-quiet small" data-${e.completed ? 'reopen-event' : 'complete'}="${esc(e.id)}">${e.completed ? 'Reopen' : 'Done'}</button>${!e.completed ? `<button type="button" class="button button-quiet small" data-snooze-event="${esc(e.id)}">Tomorrow</button>` : ''}` : ''}<button type="button" class="button button-danger-ghost small" data-delete-event="${esc(e.id)}">Delete</button></div></div>`).join('') || empty('Nothing scheduled for this date.');
+    $('#calendarGrid').innerHTML=html;
+    const day=dayKey(selectedDate),items=eventsByDay.get(day)||[];
+    const interviewCount=items.filter(x=>x.kind==='review'||x.item.type==='Interview').length;
+    const reviewCount=items.filter(x=>x.kind==='review').length;
+    $('#selectedDateTitle').textContent=selectedDate.toLocaleDateString(undefined,{month:'long',day:'numeric',weekday:'short'});
+    $('#selectedDateCount').textContent=`${interviewCount} interview${interviewCount===1?'':'s'}${reviewCount?' · '+reviewCount+' to confirm':''}${!interviewCount?' · '+items.length+' other item'+(items.length===1?'':'s'):''}`;
+    items.sort((a,b)=>{
+      const av=a.item.when ? parseDate(a.item.when).getTime():Number.MAX_SAFE_INTEGER;
+      const bv=b.item.when ? parseDate(b.item.when).getTime():Number.MAX_SAFE_INTEGER;
+      return av-bv;
+    });
+    $('#selectedDayEvents').innerHTML=items.map(({kind,item:e})=>{
+      if(kind==='review') return `<div class="detail-event tentative-event"><div class="time">${e.when?esc(fmtTime(e.when)):'Time to confirm'} · NEEDS REVIEW</div><h3>${esc(e.company||e.role||'Interview invitation')}</h3><p>${esc(e.role||e.subject||'Possible interview from Yahoo')}</p><div class="detail-actions"><button type="button" class="button button-primary small" data-find-mail="${esc(e.id)}">Review invitation</button></div></div>`;
+      return `<div class="detail-event ${e.type==='Interview'?'interview-border':e.type==='Follow-up'?'followup-border':e.type==='Deadline'?'deadline-border':''}"><div class="time">${esc(fmtTime(e.when))}${e.completed?' · COMPLETED':''} · ${durationOf(e)} min</div><h3>${esc(e.company||e.title)}</h3><p>${esc(e.company?e.title:e.type)}</p>${e.notes?`<p>${esc(e.notes)}</p>`:''}${safeUrl(e.meetingLink)?`<p><a class="inline-link" target="_blank" rel="noopener noreferrer" href="${esc(safeUrl(e.meetingLink))}">Join meeting ↗</a></p>`:''}<div class="detail-actions"><button type="button" class="button button-quiet small" data-edit-event="${esc(e.id)}">Edit</button><button type="button" class="button button-quiet small" data-download-ics="${esc(e.id)}">Export</button>${['Follow-up','Deadline'].includes(e.type)?`<button type="button" class="button button-quiet small" data-${e.completed?'reopen-event':'complete'}="${esc(e.id)}">${e.completed?'Reopen':'Done'}</button>`:''}<button type="button" class="button button-danger-ghost small" data-delete-event="${esc(e.id)}">Delete</button></div></div>`;
+    }).join('')||empty('No interviews or tasks on this date.','▦');
   }
   function renderJobs() {
     const search = $('#jobSearch').value.trim().toLowerCase(), stage = $('#stageFilter').value;
@@ -198,7 +238,7 @@
     }).join('') || empty(db.jobs.length ? 'No applications match these filters.' : 'No applications yet. Add one to start tracking.', '▤');
   }
   function renderInbox() {
-    const pending = pendingMails().sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt)));
+    const pending = pendingMails().sort((a,b)=>Number(b.category==='interview')-Number(a.category==='interview') || String(b.receivedAt).localeCompare(String(a.receivedAt)));
     $('#reviewCount').textContent = pending.length;
     $('#reviewList').innerHTML = pending.slice(0, 80).map(m => mailCard(m, true)).join('') || empty(db.lastSyncAt ? 'All caught up. No emails need your approval.' : 'Your recruitment emails will appear here after the first check.', '✓');
     $('#mailHistory').innerHTML = db.mailbox.filter(m => m.status !== 'pending').sort((a, b) => String(b.receivedAt).localeCompare(String(a.receivedAt))).slice(0, 20).map(m => mailCard(m, false)).join('') || empty('No processed messages yet.', '✉');
@@ -216,7 +256,7 @@
   function mailCard(m, pending) {
     const category = ({interview: 'Interview', interview_cancelled: 'Cancellation', application: 'Application', rejection: 'Decision', offer: 'Offer', assessment: 'Assessment', followup: 'Follow-up', other: 'Recruitment'})[m.category] || 'Recruitment';
     const status = ({approved: 'Added to planner', dismissed: 'Dismissed', auto: 'Automatically added'})[m.status] || '';
-    return `<div class="mail-card"><div class="mail-top"><span class="mail-category">${esc(category)} · ${esc(m.company || m.sender || 'Unknown company')}</span><span class="status-text">${esc(fmtDate(m.receivedAt))}</span></div><h3>${esc(m.subject || 'Untitled message')}</h3><p>From ${esc(m.sender || m.fromEmail || 'Unknown sender')}</p>${m.preview ? `<p class="mail-preview">${esc(m.preview)}</p>` : ''}<div class="mail-summary">${m.stageSuggestion ? `<span>Stage: ${esc(m.stageSuggestion)}</span>` : ''}${m.when ? `<span>▦ ${esc(fmtDateTime(m.when))}</span>` : ''}${m.dateConfidence === 'medium' ? '<span>⚠ Check extracted date</span>' : ''}${m.cancelled ? '<span>⚠ Cancellation detected</span>' : ''}</div>${pending ? `<div class="mail-actions"><button type="button" class="button button-primary small" data-approve-mail="${esc(m.id)}">Approve update</button><button type="button" class="button button-quiet small" data-dismiss-mail="${esc(m.id)}">Dismiss</button>${m.when ? `<button type="button" class="button button-quiet small" data-edit-mail-event="${esc(m.id)}">Edit event details</button>` : ''}</div>` : `<p class="status-text" style="margin-top:10px">${esc(status)}</p>`}</div>`;
+    return `<div class="mail-card" id="mail-${esc(m.id)}"><div class="mail-top"><span class="mail-category">${esc(category)} · ${esc(m.company || m.sender || 'Unknown company')}</span><span class="status-text">${esc(fmtDate(m.receivedAt))}</span></div><h3>${esc(m.subject || 'Untitled message')}</h3><p>From ${esc(m.sender || m.fromEmail || 'Unknown sender')}</p>${m.preview ? `<p class="mail-preview">${esc(m.preview)}</p>` : ''}<div class="mail-summary">${m.stageSuggestion ? `<span>Stage: ${esc(m.stageSuggestion)}</span>` : ''}${m.when ? `<span>▦ ${esc(fmtDateTime(m.when))}</span>` : m.dateOnly ? `<span>▦ ${esc(isoDate(m.dateOnly))} · time to confirm</span>` : ''}${m.dateConfidence === 'medium' ? '<span>⚠ Check extracted date</span>' : ''}${m.cancelled ? '<span>⚠ Cancellation detected</span>' : ''}</div>${pending ? `<div class="mail-actions">${m.category === 'interview' && !m.when ? '' : `<button type="button" class="button button-primary small" data-approve-mail="${esc(m.id)}">${m.category === 'interview' ? 'Add interview' : 'Approve update'}</button>`}<button type="button" class="button button-quiet small" data-dismiss-mail="${esc(m.id)}">Dismiss</button>${m.when || m.dateOnly ? `<button type="button" class="button button-quiet small" data-edit-mail-event="${esc(m.id)}">${m.when ? 'Check time / details' : 'Set interview time'}</button>` : ''}</div>` : `<p class="status-text" style="margin-top:10px">${esc(status)}</p>`}</div>`;
   }
   function renderSettings() {
     $('#lastSyncLabel').textContent = db.lastSyncAt ? fmtDateTime(db.lastSyncAt) : 'Never';
@@ -272,7 +312,7 @@
     $('#submitEditor').textContent = id ? 'Save changes' : `Add ${type === 'job' ? 'application' : 'event'}`;
     $('#editorModal').showModal();
   }
-  function closeEditor() { $('#editorModal').close(); editorMode = null; editorId = ''; }
+  function closeEditor() { $('#editorModal').close(); editorMode = null; editorId = ''; editorMailId = ''; }
   function submitEditor(ev) {
     ev.preventDefault();
     const fields = Object.fromEntries(new FormData(ev.target).entries());
@@ -286,7 +326,8 @@
       if (clashes.length && !confirm(`Scheduling conflict with ${clashes.length} other event(s): ${clashes.slice(0,2).map(c=>c.title).join(', ')}. Save anyway?`)) return;
       const old = db.events.find(x => x.id === editorId);
       if (old) {delete old.end;Object.assign(old, fields, {userEdited: true, updatedAt: now().toISOString()});}
-      else db.events.push({id: uid(), ...fields, completed: false, cancelled: false, createdAt: now().toISOString()});
+      else db.events.push({id: uid(), ...fields, ...(editorMailId?{sourceId:editorMailId}:{}), completed: false, cancelled: false, createdAt: now().toISOString()});
+      if(editorMailId) {const m=db.mailbox.find(m=>m.id===editorMailId);if(m&&m.status==='pending') {const job=findOrCreateJob(m);if(job&&m.stageSuggestion==='Interview')logStage(job,'Interview','Yahoo approval');m.status='approved';m.processedAt=now().toISOString();}}
     } else if (editorMode === 'job') {
       if (fields.jobUrl && !safeUrl(fields.jobUrl)) return toast('Job posting URL must start with https:// or http://.');
       const old = db.jobs.find(x => x.id === editorId);
@@ -321,7 +362,7 @@
       const affected = db.events.filter(e => e.calendarUid === m.calendarUid);
       affected.forEach(e => { e.cancelled = true; e.updatedAt = now().toISOString(); });
     }
-    if (m.when && isValid(parseDate(m.when)) && !m.cancelled) {
+    if (['interview','assessment','followup'].includes(m.category) && m.when && isValid(parseDate(m.when)) && !m.cancelled) {
       const existing = db.events.find(e => e.sourceId === m.id || (m.calendarUid && e.calendarUid === m.calendarUid));
       if (existing && m.calendarUid && m.dateConfidence === 'high' && !existing.userEdited) {
         existing.when = new Date(m.when).toISOString();
@@ -340,8 +381,18 @@
     let fresh = 0, automatic = 0;
     const previous = new Set([...(db.seenMailIds || []), ...db.mailbox.map(m => m.id)]);
     for (const record of feed.messages) {
-      if (!record || typeof record.id !== 'string' || record.id.length > 120 || previous.has(record.id)) continue;
+      if (!record || typeof record.id !== 'string' || record.id.length > 120) continue;
       if (!record.subject || typeof record.subject !== 'string') continue;
+      if (previous.has(record.id)) {
+        const existing = db.mailbox.find(m=>m.id===record.id);
+        if (existing && existing.status === 'pending') {
+          // Preserve approval decisions; improve unreviewed dates after parser upgrades.
+          const improvedTime = record.when && isValid(parseDate(record.when)) && (!existing.when || existing.dateConfidence==='none' || existing.dateConfidence==='date-only');
+          const improvedDay = record.dateOnly && !existing.dateOnly && !existing.when;
+          if (improvedTime || improvedDay) Object.assign(existing, {when:improvedTime?record.when:existing.when, dateOnly:record.dateOnly||existing.dateOnly, dateConfidence:record.dateConfidence, end:record.end||existing.end, calendarUid:record.calendarUid||existing.calendarUid, meetingLink:record.meetingLink||existing.meetingLink, title:record.title||existing.title});
+        }
+        continue;
+      }
       const mail = {...record, status: 'pending'};
       db.mailbox.push(mail);
       previous.add(mail.id);
@@ -483,6 +534,8 @@
       return openEditor('event','',{when:when.toISOString()});
     }
     if (data.selectDay) { const [y, m, d] = data.selectDay.split('-').map(Number); selectedDate = new Date(y, m - 1, d); displayMonth = new Date(y, m - 1, 1); return renderCalendar(); }
+    if (data.openDay) { const [y,m,d]=data.openDay.split('-').map(Number);if(y&&m&&d){selectedDate=new Date(y,m-1,d);displayMonth=new Date(y,m-1,1);setView('calendar');}return; }
+    if (data.findMail) {setView('inbox');const card=document.getElementById(`mail-${data.findMail}`);if(card)card.scrollIntoView({behavior:'smooth',block:'center'});return;}
     if (data.editJob) return openEditor('job', data.editJob);
     if (data.followupJob) {
       const job = db.jobs.find(j => j.id === data.followupJob);
@@ -501,7 +554,7 @@
     if (data.complete) { const e = db.events.find(e => e.id === data.complete); if (e) { e.completed = true; save(); toast('Task marked complete.'); } return; }
     if (data.approveMail) { const m = db.mailbox.find(x => x.id === data.approveMail); applyMail(m); save(); toast('Suggestion approved and applied.'); return; }
     if (data.dismissMail) { const m = db.mailbox.find(x => x.id === data.dismissMail); if (m) { m.status = 'dismissed'; m.processedAt = now().toISOString(); save(); toast('Suggestion dismissed.'); } return; }
-    if (data.editMailEvent) { const m = db.mailbox.find(x => x.id === data.editMailEvent); if (!m) return; openEditor('event', '', {title: m.title || m.subject || 'Interview', company: m.company || '', when: m.when, meetingLink: m.meetingLink || '', type: m.category === 'interview' ? 'Interview' : 'Follow-up', notes: 'Suggested from Yahoo Mail. Verify the details.'}); toast('Save your edited event, then dismiss the original suggestion to avoid duplicates.'); return; }
+    if (data.editMailEvent) { const m = db.mailbox.find(x => x.id === data.editMailEvent); if (!m) return; openEditor('event', '', {title: m.title || m.role || m.subject || 'Interview', company: m.company || '', when: m.when || '', meetingLink: m.meetingLink || '', type: m.category === 'interview' ? 'Interview' : 'Follow-up', notes: `Suggested from Yahoo Mail. ${m.dateOnly ? 'Possible date '+m.dateOnly+'. ' : ''}Confirm the exact time and timezone.`}); editorMailId=m.id; if (!m.when) toast('Enter the confirmed interview date and time before saving.'); return; }
   }
   function setupListeners() {
     document.addEventListener('click', handleClick);
