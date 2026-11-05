@@ -210,6 +210,12 @@ def explicit_interview_confirmation(subject: str, body: str) -> bool:
 
 def classify(subject: str, body: str) -> tuple[str, str | None]:
     text = (subject + ' ' + body[:2600]).lower()
+    subj = subject.lower().strip()
+    # Subject-specific task/hold rules override incidental mentions of an interview.
+    if re.match(r'^(?:blocked\s*[:\-]|calendar\s+(?:hold|block)\b|hold\s+for\s+interview\b)', subj):
+        return 'other', None
+    if re.search(r'\b(?:questionnaire|survey|pre[- ]interview assignment|pre[- ]interview task)\b', subj):
+        return 'assessment', None
     if re.search(r'\b(cancelled|canceled|interview cancellation)\b', text) and 'interview' in text:
         return 'interview_cancelled', None
     if re.search(r'\b(unfortunately|not moving forward|not selected|other candidates|regret to inform|will not be proceeding|position has been filled)\b', text):

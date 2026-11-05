@@ -172,3 +172,9 @@ def test_scanner_includes_older_invites_and_archive(monkeypatch):
     assert len(result)==2
     assert {m['subject'].split()[0] for m in result} == {'Older','Archived'}
     assert all(m['when'] and m['dateConfidence']=='confirmed-text' for m in result)
+
+
+def test_interview_keywords_in_questionnaire_or_calendar_hold_are_not_appointments():
+    assert scan.classify('Please Complete a Short Questionnaire Before Your Interview', 'The interview is on Monday.')[0] == 'assessment'
+    assert scan.classify('Blocked: Interview ERP Workstream Analyst', 'Reserved on calendar')[0] == 'other'
+    assert scan.classify('CLEARED - Interview 11/6 confirmation', 'Your interview is on November 6 at 2 PM.')[0] == 'interview'

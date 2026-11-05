@@ -190,8 +190,15 @@
     }
     return changed;
   }
+  // Email tasks and calendar holds must not masquerade as interview appointments.
+  function mailActionKind(m) {
+    const subject = comparable(m.subject || '');
+    if (/\b(?:questionnaire|survey|pre interview assignment|pre interview task)\b/.test(subject)) return 'questionnaire';
+    if (/^(?:blocked|calendar blocked|calendar hold|block my calendar|hold for interview)\b/.test(subject)) return 'calendar-hold';
+    return '';
+  }
   function pendingInterviewCandidates() {
-    const candidates = pendingMails().filter(m => m.category === 'interview' && !m.cancelled &&
+    const candidates = pendingMails().filter(m => m.category === 'interview' && !mailActionKind(m) && !m.cancelled &&
       ((m.when && isValid(parseDate(m.when))) || /^\d{4}-\d{2}-\d{2}$/.test(m.dateOnly || '')) &&
       !eventForMail(m));
     const priority = m => (isValid(parseDate(m.when)) ? 10 : 0) + (m.role ? 2 : 0) + (m.calendarUid ? 1 : 0);
@@ -234,7 +241,7 @@
 
   }
   function renderOverview() {
-    const upcoming = interviewLeads().slice(0, 12);
+    const upcoming = interviewLeads().filter(e => e.kind === 'saved').slice(0, 12);
     $('#greetingText').textContent = 'Your interviews, applications and next steps. All in one place.';
     $('#nextInterview').innerHTML = upcoming.map(e => `<div class="interview-list-item ${e.kind === 'review' ? 'tentative-item' : ''}">
       <div class="interview-datebox"><strong>${esc(e.when ? fmtTime(e.when) : '—')}</strong><span>${esc(isoDate(e.day))}</span></div>
@@ -249,7 +256,7 @@
     const clashes = confirmed.filter(e => conflicting(e,e.id).length);
     if(clashes.length) tasks.push(`<div class="item-row"><div class="item-icon">!</div><div class="item-main"><div class="item-title">${clashes.length} overlapping events</div><div class="item-meta">Review times before your interviews</div></div><button type="button" class="button button-quiet small" data-view="calendar">Calendar</button></div>`);
     const needsReview = interviewLeads().filter(x=>x.kind==='review').length;
-    if(needsReview) tasks.push(`<div class="item-row"><div class="item-icon">✉</div><div class="item-main"><div class="item-title">${needsReview} possible interview email${needsReview===1?'':'s'} to review</div><div class="item-meta">Detected in Yahoo; check details and add to calendar</div></div><button type="button" class="button button-quiet small" data-view="calendar">Review</button></div>`);
+    if(needsReview) tasks.push(`<div class="item-row"><div class="item-icon">✉</div><div class="item-main"><div class="item-title">${needsReview} possible interview email${needsReview===1?'':'s'} to review</div><div class="item-meta">Detected in Yahoo; check details and add to calendar</div></div><button type="button" class="button button-quiet small" data-view="inbox">Review</button></div>`);
     for (const e of actionEvents().slice(0,3)) tasks.push(`<div class="item-row"><div class="item-icon">◷</div><div class="item-main"><div class="item-title">${esc(e.title)}</div><div class="item-meta">${esc(fmtDateTime(e.when))}</div></div><button type="button" class="button button-quiet small" data-complete="${esc(e.id)}">Done</button></div>`);
     const otherMail = pendingMails().filter(m=>m.category!=='interview').length;
     if(otherMail) tasks.push(`<div class="item-row"><div class="item-icon">✉</div><div class="item-main"><div class="item-title">${otherMail} other Yahoo update${otherMail===1?'':'s'}</div></div><button type="button" class="button button-quiet small" data-view="inbox">Review</button></div>`);
@@ -324,6 +331,14 @@
     $('#quickSync').disabled = syncBusy;
   }
   function mailCard(m, pending) {
+    const actionKind = mailActionKind(m);
+    if (actionKind) {
+      const label = actionKind === 'questionnaire' ? 'Questionnaire / task' : 'Calendar hold';
+      const explanation = actionKind === 'questionnaire' ? 'Not an interview. Confirm the actual deadline before adding it.' : 'Calendar hold / blocked-time email, not an interview appointment.';
+      const taskButton = actionKind === 'questionnaire' ? `<button type="button" class="button button-primary small" data-edit-mail-task="${esc(m.id)}">Add deadline</button>` : '';
+      const actions = pending ? `<div class="mail-actions">${taskButton}<button type="button" class="button button-quiet small" data-dismiss-mail="${esc(m.id)}">Dismiss</button></div>` : `<p class="status-text">${esc(m.status)}</p>`;
+      return `<div class="mail-card" id="mail-${esc(m.id)}"><div class="mail-top"><span class="mail-category">${esc(label)} · ${esc(m.company ? displayCompany(m.company) : 'Company unknown')}</span><span class="status-text">${esc(fmtDate(m.receivedAt))}</span></div><h3>${esc(m.subject || 'Untitled message')}</h3><p>From ${esc(m.sender || m.fromEmail || 'Unknown sender')}</p><p class="micro-muted">${esc(explanation)}</p>${actions}</div>`;
+    }
     const category = ({interview: 'Interview', interview_cancelled: 'Cancellation', application: 'Application', rejection: 'Decision', offer: 'Offer', assessment: 'Assessment', followup: 'Follow-up', other: 'Recruitment'})[m.category] || 'Recruitment';
     const status = ({approved: 'Reviewed', dismissed: 'Dismissed', auto: 'Automatically added', related: 'Related email — already counted'})[m.status] || '';
     const already = m.category === 'interview' && eventForMail(m, false);
@@ -404,7 +419,7 @@
       if (old) {delete old.end;Object.assign(old, fields, {userEdited: true, updatedAt: now().toISOString()});}
       else if (matching) matching.relatedMailIds = [...new Set([...(matching.relatedMailIds || []), editorMailId])];
       else db.events.push({id: uid(), ...fields, ...(editorMailId?{sourceId:editorMailId,role:suggested?.role||'',userEdited:true}:{}), completed: false, cancelled: false, createdAt: now().toISOString()});
-      if(editorMailId) {const m=db.mailbox.find(m=>m.id===editorMailId);if(m&&m.status==='pending') {const job=findOrCreateJob(m);if(job&&m.stageSuggestion==='Interview')logStage(job,'Interview','Yahoo approval');m.status='approved';m.processedAt=now().toISOString();}}
+      if(editorMailId) {const m=db.mailbox.find(m=>m.id===editorMailId);if(m&&m.status==='pending') {if(!mailActionKind(m)) {const job=findOrCreateJob(m);if(job&&m.stageSuggestion==='Interview')logStage(job,'Interview','Yahoo approval');}m.status='approved';m.processedAt=now().toISOString();}}
     } else if (editorMode === 'job') {
       if (fields.jobUrl && !safeUrl(fields.jobUrl)) return toast('Job posting URL must start with https:// or http://.');
       const old = db.jobs.find(x => x.id === editorId);
@@ -639,7 +654,7 @@
     if (data.action === 'add-job') return openEditor('job');
     if (data.action === 'add-interview') return openEditor('event', '', {title: 'Interview', type: 'Interview', when: '', requireConfirmedTime: true});
     if (data.action === 'next-interview') {
-      const next = interviewLeads()[0];
+      const next = interviewLeads().find(e => e.kind === 'saved');
       if (!next) return toast('No upcoming interviews found. Add one or check Yahoo Review.');
       const [y,m,d] = next.day.split('-').map(Number);
       selectedDate = new Date(y,m-1,d); displayMonth = new Date(y,m-1,1); setView('calendar');
@@ -682,6 +697,15 @@
     if (data.complete) { const e = db.events.find(e => e.id === data.complete); if (e) { e.completed = true; save(); toast('Task marked complete.'); } return; }
     if (data.approveMail) { const m = db.mailbox.find(x => x.id === data.approveMail); applyMail(m); save(); toast('Suggestion approved and applied.'); return; }
     if (data.dismissMail) { const m = db.mailbox.find(x => x.id === data.dismissMail); if (m) { m.status = 'dismissed'; m.processedAt = now().toISOString(); save(); toast('Suggestion dismissed.'); } return; }
+    if (data.editMailTask) {
+      const m = db.mailbox.find(x => x.id === data.editMailTask);
+      if (!m || mailActionKind(m) !== 'questionnaire') return;
+      openEditor('event', '', {title: m.subject || 'Recruiter questionnaire', company: m.company || '', when: '', duration: 15,
+        type: 'Deadline', requireConfirmedTime: false, notes: 'Questionnaire requested by recruiter. Verify its actual deadline; no time has been inferred.'});
+      editorMailId = m.id;
+      toast('Enter the real deadline from the email. No time was assumed.');
+      return;
+    }
     if (data.editMailEvent) { const m = db.mailbox.find(x => x.id === data.editMailEvent); if (!m) return; openEditor('event', '', {title: m.title || m.role || m.subject || 'Interview', company: m.company || '', when: m.when || '', requireConfirmedTime: !m.when, meetingLink: m.meetingLink || '', type: m.category === 'interview' ? 'Interview' : 'Follow-up', notes: `Suggested from Yahoo Mail. ${m.dateOnly ? 'Possible date '+m.dateOnly+'. ' : ''}Confirm the exact time and timezone.`}); editorMailId=m.id; if (!m.when) toast('Enter the confirmed interview date and time before saving.'); return; }
   }
   function setupListeners() {

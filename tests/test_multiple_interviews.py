@@ -32,7 +32,7 @@ def test_november_6_shows_two_interviews_and_review_flow():
         page.wait_for_timeout(80)
         assert page.locator('#metricInterviews').inner_text()=='1'
         assert '1 scheduled · 2 emails to review' in page.locator('#metricInterviewHint').inner_text()
-        assert page.locator('#nextInterview .interview-list-item').count()==3
+        assert page.locator('#nextInterview .interview-list-item').count()==1
         page.locator('[data-view="calendar"]').last.click()
         page.locator('[data-select-day="2026-11-06"]').click()
         assert '1 scheduled interview · 1 email to review' in page.locator('#selectedDateCount').inner_text()
